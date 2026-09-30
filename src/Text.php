@@ -23,8 +23,18 @@ final class Text
     /** The most `meta.link_domains` the contract takes. */
     public const MAX_LINK_DOMAINS = 10;
 
-    /** Unicode whitespace, for trimming. */
-    private const SPACE = '[\s\p{Z}]';
+    /**
+     * The whitespace {@see trim} removes, as UTF-8: the 26 characters PCRE's `[\s\p{Z}]`
+     * matches with `/u` (`TextTest` holds the two equal), listed so trimming needs no regex.
+     */
+    private const SPACES = [
+        "\t" => true, "\n" => true, "\x0B" => true, "\x0C" => true, "\r" => true, ' ' => true,
+        "\u{85}" => true, "\u{A0}" => true, "\u{1680}" => true, "\u{180E}" => true,
+        "\u{2000}" => true, "\u{2001}" => true, "\u{2002}" => true, "\u{2003}" => true,
+        "\u{2004}" => true, "\u{2005}" => true, "\u{2006}" => true, "\u{2007}" => true,
+        "\u{2008}" => true, "\u{2009}" => true, "\u{200A}" => true, "\u{2028}" => true,
+        "\u{2029}" => true, "\u{202F}" => true, "\u{205F}" => true, "\u{3000}" => true,
+    ];
 
     /**
      * An opening tag whose quoted values hold no `>` (kses, which filters every comment the
@@ -218,13 +228,51 @@ final class Text
     }
 
     /**
-     * Removes Unicode whitespace from both ends.
+     * Removes Unicode whitespace ({@see SPACES}) from both ends.
+     *
+     * A scan, not a regex: `\s+$` backtracks through every run of interior whitespace, so it
+     * is quadratic and, at the PCRE limit, returns null — which must never turn a text into
+     * an empty one (an empty text gets the failure mode, and fail-open publishes it). Each
+     * byte is looked at once or twice.
      *
      * @param string $text Valid UTF-8.
      * @return string The trimmed text.
      */
     private static function trim(string $text): string
     {
-        return (string)preg_replace('/^' . self::SPACE . '+|' . self::SPACE . '+$/u', '', $text);
+        $start = 0;
+        $end = strlen($text);
+        while (($length = self::spaceAt($text, $start, $end, true)) > 0) {
+            $start += $length;
+        }
+        while (($length = self::spaceAt($text, $end, $start, false)) > 0) {
+            $end -= $length;
+        }
+        return (string)substr($text, $start, $end - $start);
+    }
+
+    /**
+     * The byte length of the whitespace character right after (`$forward`) or right before
+     * `$at`, within the bound, or 0 when there is none. UTF-8 is self-synchronising, so a
+     * listed sequence found against a character boundary is a whole character.
+     *
+     * @param string $text    Valid UTF-8.
+     * @param int    $at      A byte offset at a character boundary.
+     * @param int    $bound   The end of the text (forward) or the scan's start (backward).
+     * @param bool   $forward The direction.
+     * @return int 0 to 3.
+     */
+    private static function spaceAt(string $text, int $at, int $bound, bool $forward): int
+    {
+        for ($length = 1; $length <= 3; $length++) {
+            $from = $forward ? $at : $at - $length;
+            if ($forward ? $at + $length > $bound : $from < $bound) {
+                return 0;
+            }
+            if (isset(self::SPACES[substr($text, $from, $length)])) {
+                return $length;
+            }
+        }
+        return 0;
     }
 }

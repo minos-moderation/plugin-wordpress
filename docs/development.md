@@ -66,6 +66,10 @@ Decisions worth knowing before changing anything:
   `_minos_auto_published`; a verdict arriving later is applied (`zablokowane` → hold,
   `ocenzurowane` → per setting). `transition_comment_status` and `edit_comment` clear the
   flag, so a person's status change or edit after the publication stands.
+- **The plain text never goes empty by accident.** An empty text gets the failure mode,
+  so a regex in `Text` that gives up (a PCRE limit returns null) falls back to its input,
+  and trimming is a byte scan over the 26 characters PCRE calls whitespace, not a regex
+  (`\s+$` is quadratic over interior runs).
 - **A cut comment is never published by a verdict.** The gateway assessed only its first
   3000 characters: `bezpieczne` gets the failure mode, `ocenzurowane` is held.
 - **The masked text is plain text, and verified.** `Outcome` escapes it with

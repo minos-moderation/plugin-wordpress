@@ -1,0 +1,44 @@
+{
+    "name": "minos-moderation/plugin-wordpress",
+    "description": "Minos for WordPress: sends new comments to the Wergiliusz gateway for assessment and applies the signed verdict it delivers",
+    "type": "wordpress-plugin",
+    "license": "GPL-2.0-or-later",
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "https://github.com/minos-moderation/client-php"
+        }
+    ],
+    "require": {
+        "php": ">=7.4",
+        "ext-json": "*",
+        "minos-moderation/client-php": "dev-main"
+    },
+    "require-dev": {
+        "ext-curl": "*",
+        "ext-mbstring": "*",
+        "phpunit/phpunit": "^9.6"
+    },
+    "autoload": {
+        "psr-4": {
+            "Minos\\WordPress\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Minos\\WordPress\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit"
+    },
+    "config": {
+        "platform": {
+            "php": "7.4.33"
+        },
+        "optimize-autoloader": true,
+        "sort-packages": true,
+        "platform-check": false
+    },
+    "minimum-stability": "stable"
+}

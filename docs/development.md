@@ -12,10 +12,10 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
 | `src/Platform.php` | The one adapter: every WordPress function the logic calls. |
 | `src/Settings.php` | The settings, normalised to known values; the key and secret options. |
 | `src/Submission.php` | `pre_comment_approved` → hold; `comment_post` / `rest_insert_comment` → `POST /api/v1/b2b/oceny`; the answers and the retries. |
-| `src/Receiver.php` | The REST webhook `minos/v1/webhook`: raw body, `Signature::verify`, `WebhookPayload::parse`, dedupe. |
-| `src/Outcome.php` | Applies a verdict or the failure mode; the held-back e-mails. |
+| `src/Receiver.php` | The REST webhook `minos/v1/webhook`: `404` while switched off; raw body, `Signature::verify`, `WebhookPayload::parse`, dedupe. |
+| `src/Outcome.php` | Applies a verdict (on time or late) or the failure mode; verified masked writes; the held-back moderator e-mail. |
 | `src/Sweeper.php` | WP-Cron every 5 minutes: the receive timeout and due retries. |
-| `src/Text.php` | Plain text for the gateway (strip, decode, trim, cut at 3000) and back to safe HTML. |
+| `src/Text.php` | Plain text for the gateway (strip, keep `title`/`alt` text, decode, trim, cut at 3000), link domains, and back to safe HTML. |
 | `src/Log.php` | The administrator's error log: codes and statuses, never content or secrets. |
 | `src/Notice.php` | The privacy (RODO) notice under the comment form. |
 | `src/Admin/` | Settings → Minos, the "Minos" comments column and the admin notices. |
@@ -37,15 +37,23 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
 2. `comment_post` (priority 5, before WordPress's own notifications at 10) or, for the REST
    API which does not fire `comment_post`, `rest_insert_comment` marks it `oczekuje` and
    sends it synchronously (`wp_remote_post`, 10 s, no redirects). The body is one item:
-   `{"id":"wp:<ID>","tekst":…,"profil":…,"meta":{"links":…,"author_first_post":…}}`.
+   `{"id":"wp:<ID>","tekst":…,"profil":…,"meta":{"links":…,"link_domains":[…],"author_first_post":…}}`
+   (`link_domains` only when the content has links: at most 10 registrable domains, found
+   with a short list of second-level suffixes instead of the Public Suffix List). A plain
+   text over 3000 characters is marked `_minos_cut`.
 3. The answer: `202` → accepted; `429`, `5xx` or no answer → a retry after `ponow_za_s`
    or a doubling backoff from 60 s (a one-off WP-Cron event, plus the sweep as a
    fallback); anything else → a configuration error: the failure mode, a log entry and an
    admin notice.
-4. The webhook applies the verdict to a comment still marked `oczekuje`; anything else gets
-   `200` and nothing else. The e-mails WordPress held back go out from WP-Cron.
-5. The sweep gives the failure mode to a comment that waited past the timeout, counted from
-   the gateway's `202`, or from the hold while it was never accepted.
+4. The webhook applies the verdict to a comment still marked `oczekuje`, or to one the
+   plugin published under fail-open (`_minos_auto_published`); anything else gets `200`
+   and nothing else. The moderator's e-mail WordPress held back goes out from WP-Cron.
+5. The sweep gives the failure mode to a comment that waited past the timeout (at least
+   20 minutes), counted from the gateway's `202`, or from the hold while it was never
+   accepted.
+
+With `enabled` off the plugin does nothing: no hold, no submission, no retry, no sweep, and
+the webhook answers `404`. Waiting comments stay in WordPress's queue for a person.
 
 Decisions worth knowing before changing anything:
 
@@ -54,15 +62,27 @@ Decisions worth knowing before changing anything:
   is `1`.
 - **A person's decision stands.** A comment that is no longer held when the verdict comes
   keeps its status; only the verdict is recorded.
-- **The masked text is plain text.** `Outcome` escapes it with `htmlspecialchars` before it
-  becomes the content, and publishes it only when the comment still starts with the text
-  that was sent (`_minos_sent_chars` and `_minos_sent_hash`); the unassessed tail of a long
-  comment is kept as plain text.
+- **Late verdicts.** Under fail-open the timeout publishes and sets
+  `_minos_auto_published`; a verdict arriving later is applied (`zablokowane` → hold,
+  `ocenzurowane` → per setting). `transition_comment_status` and `edit_comment` clear the
+  flag, so a person's status change or edit after the publication stands.
+- **A cut comment is never published by a verdict.** The gateway assessed only its first
+  3000 characters: `bezpieczne` gets the failure mode, `ocenzurowane` is held.
+- **The masked text is plain text, and verified.** `Outcome` escapes it with
+  `htmlspecialchars` and writes it only when the comment still reads exactly as the text
+  that was sent (`_minos_sent_chars` and `_minos_sent_hash`). It counts only when
+  `wp_update_comment` reports success AND a re-read finds exactly the masked HTML: wpdb
+  refuses a value over the `text` column's 65,535 bytes (escaping can multiply the length
+  by six) and filters may change it. On a failure the original is put back if needed,
+  `_minos_original` goes once the content is the original again, the comment stays held
+  and `zapis_zamaskowanej_nieudany` is recorded (meta and log).
 - **Slashes.** `wp_update_comment` and `update_comment_meta` unslash their input, so
   `Platform` slashes it; the stubs unslash too, and a test holds a backslash.
 - **Notifications.** A `notify_moderator` filter suppresses the "awaiting moderation" e-mail
-  while a comment is `oczekuje`; after the outcome, `wp_new_comment_notify_moderator` and
-  `wp_new_comment_notify_postauthor` run from WP-Cron and each checks the final status.
+  while a comment is `oczekuje`; when the outcome holds it, `wp_new_comment_notify_moderator`
+  runs from WP-Cron. The post's author is mailed by core itself on approval
+  (`wp_set_comment_status` hooks `wp_new_comment_notify_postauthor`), so the plugin never
+  sends that one.
 - **Not done:** batching several comments into one request (every request carries one
   item); translation files (the source strings are Polish, in `__()` with the
   `minos-moderation` domain, and `languages/` is loaded when present).
@@ -80,8 +100,12 @@ setting the request body from `php://input`, `WP_REST_Request::get_body()` and
 `wp_schedule_single_event`, `wp_schedule_event`, `wp_next_scheduled`, `wp_unschedule_hook`,
 the `cron_schedules` filter, `get_comment`, `get_comments` (`status => any`, meta, `count`,
 `user_id`, `author_email`, `date_query`), `get_comment_meta` / `update_comment_meta` /
-`delete_comment_meta` / `delete_metadata`, `wp_set_comment_status`, `wp_update_comment`
-(unslashes; runs `wp_filter_comment`), `wp_slash`, `user_can`, `current_user_can`,
+`delete_comment_meta` / `delete_metadata`, `wp_set_comment_status` (false when nothing
+changed; approval mails the post's author), `transition_comment_status`,
+`wp_update_comment` (unslashes; returns `1`/`0`, or `false`/`WP_Error`; runs
+`pre_comment_content`, `comment_save_pre` and `wp_update_comment_data`, then
+`edit_comment`), wpdb refusing a value longer than its column (`text`: 65,535 bytes),
+`wp_slash`, `user_can`, `current_user_can`,
 `get_option` / `update_option` / `add_option` (autoload `false`) / `delete_option`,
 `register_setting` (`type`, `sanitize_callback`, `default`), `add_options_page`,
 `add_settings_section`, `add_settings_field`, `add_settings_error`, `settings_fields`,
@@ -145,9 +169,11 @@ JSON on disk: never send real comments to it.
 
 `composer.json` requires `minos-moderation/client-php` at `dev-main` from its GitHub
 repository (a `vcs` repository entry); `composer.lock` pins the exact commit, so a build is
-reproducible. When the client is tagged, replace `dev-main` with `^0.1` and run
+reproducible. Until the client's `v0.1.0` tag exists, the lock IS the pin (commit
+`fc4beb7`); once it does, replace `dev-main` with `^0.1` and run
 `composer update minos-moderation/client-php`. To move the pin before that, run the same
-update and commit the lock. The plugin never forks the client's verification.
+update after reviewing the client's change, and commit the lock. The plugin never forks
+the client's verification.
 
 `config.platform-check` is off: WordPress's `Requires PHP: 7.4` header already refuses
 older hosts, and Composer's check would stop the whole site instead.
@@ -159,7 +185,9 @@ bin/build-zip.sh            # → build/minos-moderation.zip
 ```
 
 It copies the entry points, `src/`, `LICENSE`, `README.md` and the composer files into a
-staging directory, runs `composer install --no-dev --classmap-authoritative`, strips the
-client library down to its `src/`, `LICENSE` and `composer.json` (its mock gateway has a
-`public/index.php` that must never be reachable on a forum's server), refuses to package
-any development file, lints every PHP file, and zips `minos-moderation/`.
+staging directory, runs `composer install --no-dev --classmap-authoritative`, removes
+`composer.json` and `composer.lock` (the plugin directory is served, and they would publish
+the exact versions), strips the client library down to its `src/` and `LICENSE` (its mock
+gateway has a `public/index.php` that must never be reachable on a forum's server),
+refuses to package any development or composer file, lints every PHP file, and zips
+`minos-moderation/`.

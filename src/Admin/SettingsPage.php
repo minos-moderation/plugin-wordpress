@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Minos\WordPress\Admin;
 
 use Minos\WordPress\Log;
+use Minos\WordPress\Meta;
 use Minos\WordPress\Receiver;
 use Minos\WordPress\Settings;
 
@@ -193,7 +194,7 @@ final class SettingsPage
                 printf('<input type="checkbox" id="%s" name="%s" value="1" %s />', esc_attr($id),
                     esc_attr($input), checked($values[$name], true, false));
                 if ($name === 'enabled') {
-                    self::help(__('Po włączeniu każdy nowy komentarz (poza komentarzami moderatorów) jest wstrzymywany do czasu otrzymania werdyktu. Wtyczka działa dopiero, gdy zapisano klucz API i sekret webhooka.', 'minos-moderation'));
+                    self::help(__('Po włączeniu każdy nowy komentarz (poza komentarzami moderatorów) jest wstrzymywany do czasu otrzymania werdyktu. Wtyczka działa dopiero, gdy zapisano klucz API i sekret webhooka. Po wyłączeniu wtyczka nic nie robi: nie wysyła komentarzy ani ponowień, nie przyjmuje werdyktów, a komentarze czekające na werdykt zostają w kolejce moderacji do decyzji człowieka.', 'minos-moderation'));
                 }
                 break;
             case 'gateway_url':
@@ -225,14 +226,14 @@ final class SettingsPage
                 printf('<input type="number" class="small-text" id="%s" name="%s" value="%d" min="%d" max="%d" /> %s',
                     esc_attr($id), esc_attr($input), (int)$values['timeout_min'], Settings::MIN_TIMEOUT_MIN,
                     Settings::MAX_TIMEOUT_MIN, esc_html__('min', 'minos-moderation'));
-                self::help(__('Domyślnie 20 minut: brama próbuje dostarczyć werdykt przez 15 minut, do tego zapas. Krótszy czas może sprawić, że spóźniony werdykt zostanie pominięty.', 'minos-moderation'));
+                self::help(__('Co najmniej i domyślnie 20 minut: brama próbuje dostarczyć werdykt przez 15 minut, do tego zapas. Jeśli przy fail-open komentarz zostanie opublikowany bez werdyktu, a werdykt nadejdzie później, wtyczka go zastosuje — chyba że ktoś w międzyczasie zmienił status komentarza lub go edytował.', 'minos-moderation'));
                 break;
             case 'censored_mode':
                 $this->radios($input, $values['censored_mode'], [
                     Settings::CENSORED_PUBLISH => __('opublikuj wersję z zamaskowanymi fragmentami (█)', 'minos-moderation'),
                     Settings::HOLD             => __('zostaw do ręcznej moderacji', 'minos-moderation'),
                 ]);
-                self::help(__('Oryginalna treść zostaje zachowana w danych komentarza. Gdy brama nie odesłała wersji zamaskowanej, komentarz zostaje do ręcznej moderacji.', 'minos-moderation'));
+                self::help(__('Oryginalna treść zostaje zachowana w danych komentarza. Komentarz zostaje do ręcznej moderacji, gdy brama nie odesłała wersji zamaskowanej, gdy nie udało się jej zapisać albo gdy komentarz jest dłuższy niż 3000 znaków (oceniono tylko jego początek).', 'minos-moderation'));
                 break;
             case 'blocked_mode':
                 $this->radios($input, $values['blocked_mode'], [
@@ -308,7 +309,8 @@ final class SettingsPage
         foreach ($entries as $entry) {
             printf('<tr><td>%s</td><td>%s</td><td><code>%s</code></td><td>#%d</td></tr>',
                 esc_html(wp_date('Y-m-d H:i:s', (int)($entry['time'] ?? 0))),
-                esc_html(isset($entry['http']) ? (string)$entry['http'] : __('brak odpowiedzi', 'minos-moderation')),
+                esc_html(isset($entry['http']) ? (string)$entry['http']
+                    : (($entry['code'] ?? null) === Meta::ERROR_MASKED_WRITE ? '—' : __('brak odpowiedzi', 'minos-moderation'))),
                 esc_html((string)($entry['code'] ?? '—')), (int)($entry['comment'] ?? 0));
         }
         echo '</tbody></table>';

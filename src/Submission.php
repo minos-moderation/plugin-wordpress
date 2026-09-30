@@ -17,9 +17,14 @@ defined('ABSPATH') || exit;
  * trash or refused, pingbacks, trackbacks and other comment types, and everything while
  * the plugin is switched off or has no key or secret.
  *
- * What travels is the comment's id, its plain text (the first 3000 characters), the
- * profile, and two spam signals: the number of links and whether this is the author's
- * first approved comment. Never the author's name, e-mail, IP address or user id.
+ * What travels is the comment's id, its plain text (the first 3000 characters; a longer
+ * comment is marked {@see Meta::CUT} and no verdict publishes it), the profile, and spam
+ * signals: the number of links, their registrable domains, and whether this is the
+ * author's first approved comment. Never the author's name, e-mail, IP address, website
+ * or user id.
+ *
+ * While moderation is switched off nothing is sent, not even a retry: comments already
+ * waiting stay in WordPress's moderation queue for a person.
  */
 final class Submission
 {
@@ -176,16 +181,25 @@ final class Submission
      */
     public function submit(int $id): string
     {
+        if (!$this->settings->all()['enabled']) {
+            return self::SKIPPED;
+        }
         $comment = $this->wp->comment($id);
         if ($comment === null || $this->wp->meta($id, Meta::STATUS) !== Meta::PENDING) {
             return self::SKIPPED;
         }
         $key = $this->settings->apiKey();
-        $text = Text::cut(Text::plain((string)$comment->comment_content));
+        $plain = Text::plain((string)$comment->comment_content);
+        $text = Text::cut($plain);
         if ($text === '' || $key === '') {
             // Nothing to assess, or nothing to assess it with: no verdict, no guess.
             $this->outcome->withoutVerdict($id, null);
             return self::REFUSED;
+        }
+        if (Text::isCut($plain)) {
+            $this->wp->setMeta($id, Meta::CUT, '1');
+        } else {
+            $this->wp->deleteMeta($id, Meta::CUT);
         }
         $this->wp->setMeta($id, Meta::SENT_CHARS, mb_strlen($text, 'UTF-8'));
         $this->wp->setMeta($id, Meta::SENT_HASH, hash('sha256', $text));
@@ -202,7 +216,8 @@ final class Submission
     }
 
     /**
-     * The request's item: nothing about the author but two spam signals.
+     * The request's item: nothing about the author but spam signals derived from the
+     * content and one yes/no about the author's history.
      *
      * @param object $comment The `WP_Comment`.
      * @param string $text    The text to assess.
@@ -210,16 +225,20 @@ final class Submission
      */
     private function item(object $comment, string $text): array
     {
+        $content = (string)$comment->comment_content;
         $userId = (int)($comment->user_id ?? 0);
         $email = (string)($comment->comment_author_email ?? '');
+        $meta = ['links' => Text::linkCount($content)];
+        $domains = Text::linkDomains($content);
+        if ($domains !== []) {
+            $meta['link_domains'] = $domains;
+        }
+        $meta['author_first_post'] = $this->wp->approvedCommentsBy($userId, $email) === 0;
         return [
             'id'     => 'wp:' . (int)$comment->comment_ID,
             'tekst'  => $text,
             'profil' => $this->settings->all()['profile'],
-            'meta'   => [
-                'links'             => Text::linkCount((string)$comment->comment_content),
-                'author_first_post' => $this->wp->approvedCommentsBy($userId, $email) === 0,
-            ],
+            'meta'   => $meta,
         ];
     }
 

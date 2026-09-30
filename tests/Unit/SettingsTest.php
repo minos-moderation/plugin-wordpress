@@ -42,6 +42,14 @@ final class SettingsTest extends PluginTestCase
         self::assertFalse($this->plugin->settings->isActive());
     }
 
+    public function testTheTimeoutIsNeverShorterThanTheGatewaysDeliveryWindowWithGrace(): void
+    {
+        foreach (['5', 19, '20', 45] as $minutes) {
+            WpStub::$options[Settings::OPTION] = ['timeout_min' => $minutes];
+            self::assertSame(max(20, (int)$minutes) * 60, $this->plugin->settings->timeoutS(), (string)$minutes);
+        }
+    }
+
     public function testAStoredValueNobodyChoseReadsAsTheDefault(): void
     {
         WpStub::$options[Settings::OPTION] = ['enabled' => 'yes', 'failure_mode' => 'guess', 'profile' => 'forum_kids',

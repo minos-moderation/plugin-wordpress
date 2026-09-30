@@ -97,12 +97,20 @@ final class CommentsScreen
         if ($categories !== '') {
             echo '<br /><small>' . esc_html(str_replace(',', ', ', $categories)) . '</small>';
         }
+        if ($this->wp->meta($id, Meta::CUT) === '1') {
+            echo '<br /><small>' . esc_html__('wpis dłuższy niż 3000 znaków — oceniono początek', 'minos-moderation') . '</small>';
+        }
         $error = $this->wp->meta($id, Meta::ERROR);
-        if ($error !== '') {
+        if ($error === Meta::ERROR_MASKED_WRITE) {
+            echo '<br /><small>' . esc_html__('nie udało się zapisać wersji zamaskowanej — komentarz czeka na ręczną moderację', 'minos-moderation') . '</small>';
+        } elseif ($error !== '') {
             echo '<br /><small>' . esc_html(sprintf(__('błąd: %s', 'minos-moderation'), $error)) . '</small>';
         }
+        if ($this->wp->meta($id, Meta::AUTO_PUBLISHED) === '1') {
+            echo '<br /><small>' . esc_html__('opublikowano bez werdyktu (fail-open); spóźniony werdykt zostanie zastosowany', 'minos-moderation') . '</small>';
+        }
         if ($this->wp->meta($id, Meta::ORIGINAL) !== '') {
-            echo '<br /><small>' . esc_html__('opublikowano wersję zamaskowaną; oryginał zachowano', 'minos-moderation') . '</small>';
+            echo '<br /><small>' . esc_html__('treść zastąpiona wersją zamaskowaną; oryginał zachowano', 'minos-moderation') . '</small>';
         }
         if ($this->wp->meta($id, Meta::SUPPORT) === '1') {
             echo '<p><strong>' . esc_html__('Sygnał wsparcia:', 'minos-moderation') . '</strong> '

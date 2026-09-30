@@ -13,14 +13,16 @@ defined('ABSPATH') || exit;
  * The webhook the gateway delivers verdicts to: `POST /wp-json/minos/v1/webhook`.
  *
  * The route is public (`permission_callback` is `__return_true`) because the signature IS
- * the authentication. The contract's receiving checklist, in order:
+ * the authentication. While moderation is switched off the route answers `404` and reads
+ * nothing: the plugin does nothing, and the gateway retries within its delivery window.
+ * Otherwise the contract's receiving checklist, in order:
  * 1. the raw body, as the bytes arrived (`WP_REST_Request::get_body()` is `php://input`),
  *    never the re-encoded parameters;
  * 2. `X-Wergiliusz-Podpis` verified by the bundled `Signature::verify` — `401` otherwise, and
  *    the gateway retries;
- * 3. `WebhookPayload::parse` — `400` for a body that is not a payload; an id that is not a
- *    comment waiting for its verdict (unknown, or handled already: deliveries repeat) gets
- *    `200` and nothing else;
+ * 3. `WebhookPayload::parse` — `400` for a body that is not a payload; an id the verdict can
+ *    no longer change (unknown, handled already — deliveries repeat — or decided by a
+ *    person) gets `200` and nothing else;
  * 4. the verdict applied ({@see Outcome});
  * 5. `200` at once: the only slow step, the e-mail, goes to WP-Cron.
  */
@@ -70,10 +72,13 @@ final class Receiver
      * Handles one delivery.
      *
      * @param \WP_REST_Request $request The request.
-     * @return \WP_REST_Response `200`, `400` or `401`, without a body worth reading.
+     * @return \WP_REST_Response `200`, `400`, `401` or `404`, without a body worth reading.
      */
     public function handle($request): \WP_REST_Response
     {
+        if (!$this->settings->all()['enabled']) {
+            return $this->wp->response(404);
+        }
         $body = (string)$request->get_body();
         $header = $request->get_header(Signature::HEADER);
         $secret = $this->settings->webhookSecret();
@@ -87,7 +92,7 @@ final class Receiver
         }
         if (preg_match(self::ID, $payload['id'], $match) === 1) {
             $id = (int)$match[1];
-            if ($this->wp->meta($id, Meta::STATUS) === Meta::PENDING) {
+            if ($this->outcome->awaitsVerdict($id)) {
                 $this->outcome->verdict($id, $payload);
             }
         }

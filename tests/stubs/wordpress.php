@@ -428,28 +428,74 @@ function delete_metadata($type, $objectId, $key, $value = '', $deleteAll = false
     return true;
 }
 
+/**
+ * As core: false when the status does not change (wpdb reports no row updated); approving
+ * mails the post's author (core hooks `wp_new_comment_notify_postauthor` onto
+ * `wp_set_comment_status`); then `transition_comment_status`.
+ */
 function wp_set_comment_status($id, $status, $wpError = false)
 {
     $map = ['approve' => '1', '1' => '1', 'hold' => '0', '0' => '0', 'spam' => 'spam', 'trash' => 'trash'];
-    if (!isset($map[$status], WpStub::$comments[(int)$id])) {
+    $id = (int)$id;
+    if (!isset($map[$status], WpStub::$comments[$id])) {
         return false;
     }
-    WpStub::$comments[(int)$id]['comment_approved'] = $map[$status];
-    WpStub::$statusChanges[] = [(int)$id, (string)$status];
+    $old = WpStub::$comments[$id]['comment_approved'];
+    if ($old === $map[$status]) {
+        return $wpError ? new WP_Error('db_update_error', 'Could not update comment status.') : false;
+    }
+    WpStub::$comments[$id]['comment_approved'] = $map[$status];
+    WpStub::$statusChanges[] = [$id, (string)$status];
+    if ($map[$status] === '1') {
+        wp_new_comment_notify_postauthor($id);
+    }
+    wpstub_transition_comment_status($map[$status], $old, $id);
     return true;
 }
 
+/**
+ * As core: the content filters run on the way in (`pre_comment_content` on slashed data,
+ * `comment_save_pre` on unslashed), `wp_update_comment_data` may refuse with a `WP_Error`,
+ * wpdb refuses a `comment_content` over the `text` column's 65,535 bytes, and a done
+ * update fires `edit_comment`.
+ */
 function wp_update_comment($commentarr, $wpError = false)
 {
-    $data = wp_unslash($commentarr);
-    $id = (int)$data['comment_ID'];
+    $id = (int)($commentarr['comment_ID'] ?? 0);
     if (!isset(WpStub::$comments[$id])) {
-        return false;
+        return $wpError ? new WP_Error('invalid_comment_id', 'Invalid comment ID.') : false;
+    }
+    $old = WpStub::$comments[$id];
+    $merged = array_merge(wp_slash($old), $commentarr);
+    $merged['comment_content'] = apply_filters('pre_comment_content', $merged['comment_content']);
+    $data = wp_unslash($merged);
+    $data['comment_content'] = apply_filters('comment_save_pre', $data['comment_content']);
+    $data = apply_filters('wp_update_comment_data', $data, $old, $commentarr);
+    if (is_wp_error($data)) {
+        return $wpError ? $data : false;
+    }
+    if (strlen((string)$data['comment_content']) > 65535) {
+        return $wpError ? new WP_Error('db_update_error', 'Could not update comment in the database.') : false;
     }
     foreach ($data as $name => $value) {
         WpStub::$comments[$id][$name] = (string)$value;
     }
+    do_action('edit_comment', $id, $data);
+    if (WpStub::$comments[$id]['comment_approved'] !== $old['comment_approved']) {
+        wpstub_transition_comment_status(WpStub::$comments[$id]['comment_approved'], $old['comment_approved'], $id);
+    }
     return 1;
+}
+
+/** Core's `wp_transition_comment_status`, as far as `transition_comment_status` goes. */
+function wpstub_transition_comment_status(string $new, string $old, int $id): void
+{
+    $names = ['0' => 'unapproved', '1' => 'approved'];
+    $new = $names[$new] ?? $new;
+    $old = $names[$old] ?? $old;
+    if ($new !== $old) {
+        do_action('transition_comment_status', $new, $old, get_comment($id));
+    }
 }
 
 function wp_new_comment_notify_moderator($id)

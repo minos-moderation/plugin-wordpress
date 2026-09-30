@@ -41,16 +41,21 @@ final class Sweeper
     /** @var Outcome */
     private $outcome;
 
+    /** @var Settings */
+    private $settings;
+
     /**
      * @param Platform   $wp         The WordPress adapter.
      * @param Submission $submission What sends a comment.
      * @param Outcome    $outcome    What applies the failure mode.
+     * @param Settings   $settings   The settings.
      */
-    public function __construct(Platform $wp, Submission $submission, Outcome $outcome)
+    public function __construct(Platform $wp, Submission $submission, Outcome $outcome, Settings $settings)
     {
         $this->wp = $wp;
         $this->submission = $submission;
         $this->outcome = $outcome;
+        $this->settings = $settings;
     }
 
     /**
@@ -82,12 +87,16 @@ final class Sweeper
     }
 
     /**
-     * One sweep.
+     * One sweep; none while moderation is switched off, so waiting comments stay in
+     * WordPress's moderation queue for a person.
      *
      * @return void
      */
     public function run(): void
     {
+        if (!$this->settings->all()['enabled']) {
+            return;
+        }
         $sent = 0;
         $sending = true;
         foreach ($this->wp->pendingCommentIds(self::BATCH) as $id) {

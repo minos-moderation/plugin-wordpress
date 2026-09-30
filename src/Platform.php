@@ -150,27 +150,35 @@ class Platform
     }
 
     /**
-     * Changes a comment's status.
+     * Changes a comment's status. Approving also mails the post's author: core hooks
+     * `wp_new_comment_notify_postauthor` onto `wp_set_comment_status` for `approve`.
      *
      * @param int    $id     The comment id.
      * @param string $status `approve`, `hold` or `spam`.
-     * @return void
+     * @return bool Whether the status was written (false also when it was already that).
      */
-    public function setStatus(int $id, string $status): void
+    public function setStatus(int $id, string $status): bool
     {
-        wp_set_comment_status($id, $status);
+        $result = wp_set_comment_status($id, $status);
+        return $result === true;
     }
 
     /**
      * Replaces a comment's content. WordPress unslashes what it is given, hence the slash.
      *
+     * WordPress may refuse (wpdb refuses a value longer than the column, a
+     * `wp_update_comment_data` filter may return an error) or store something else (the
+     * content filters run on the way in), so the caller re-reads the comment before it
+     * relies on the new content.
+     *
      * @param int    $id   The comment id.
      * @param string $html The new content, already safe as HTML.
-     * @return void
+     * @return bool Whether WordPress reported the update as done.
      */
-    public function replaceContent(int $id, string $html): void
+    public function replaceContent(int $id, string $html): bool
     {
-        wp_update_comment(['comment_ID' => $id, 'comment_content' => wp_slash($html)]);
+        $result = wp_update_comment(['comment_ID' => $id, 'comment_content' => wp_slash($html)]);
+        return $result !== false && !is_wp_error($result);
     }
 
     /**
@@ -322,17 +330,20 @@ class Platform
     }
 
     /**
-     * Sends the e-mails WordPress would have sent when the comment was posted: to the
-     * moderator for a held comment, to the post's author for a published one. Each
-     * function checks the site's settings and the comment's status itself.
+     * Sends the "awaiting moderation" e-mail WordPress held back while the comment waited
+     * for its verdict. The function checks the site's setting and that the comment is
+     * still held.
+     *
+     * Only the moderator's e-mail: the post's author is mailed by core when the plugin
+     * publishes a comment (`wp_set_comment_status('approve')`), so sending it here too
+     * would mail the author twice.
      *
      * @param int $id The comment id.
      * @return void
      */
-    public function notifyAsWordPressWould(int $id): void
+    public function notifyModerator(int $id): void
     {
         wp_new_comment_notify_moderator($id);
-        wp_new_comment_notify_postauthor($id);
     }
 
     /**

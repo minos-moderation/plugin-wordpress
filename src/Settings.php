@@ -49,8 +49,12 @@ final class Settings
     /** The receive timeout: the gateway's 15-minute TTL plus a grace period. */
     public const DEFAULT_TIMEOUT_MIN = 20;
 
-    /** The shortest and longest receive timeout the settings accept, in minutes. */
-    public const MIN_TIMEOUT_MIN = 5;
+    /**
+     * The shortest and longest receive timeout the settings accept, in minutes. Never
+     * shorter than the gateway's delivery window plus the grace, so a working gateway's
+     * verdict arrives before the failure mode.
+     */
+    public const MIN_TIMEOUT_MIN = 20;
     public const MAX_TIMEOUT_MIN = 1440;
 
     /** @var Platform */

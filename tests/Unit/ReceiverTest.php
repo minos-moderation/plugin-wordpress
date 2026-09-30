@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Minos\WordPress\Tests\Unit;
 
 use Minos\Client\Signature;
+use Minos\WordPress\Admin\CommentsScreen;
+use Minos\WordPress\Log;
 use Minos\WordPress\Meta;
 use Minos\WordPress\Outcome;
 use Minos\WordPress\Settings;
@@ -168,16 +170,136 @@ final class ReceiverTest extends PluginTestCase
         self::assertSame('uwaga &lt;script&gt; i ukośnik \\ oraz brzydkie słowo', $this->field($id, Meta::ORIGINAL));
     }
 
-    public function testTheUnassessedTailOfALongCommentIsKept(): void
+    public function testACensoredCutCommentIsHeldWithItsOriginal(): void
     {
-        $this->configure();
-        $head = str_repeat('a', 2995) . ' brzydkie';
-        $id = $this->post($head . ' dalszy ciąg');
+        $this->configure(['censored_mode' => Settings::CENSORED_PUBLISH, 'failure_mode' => Settings::FAIL_OPEN]);
+        $original = str_repeat('a', 2995) . ' brzydkie dalszy ciąg';
+        $id = $this->post($original);
+        self::assertSame('1', $this->field($id, Meta::CUT));
 
-        $masked = str_repeat('a', 2995) . ' ████';
-        $this->deliver(self::verdict($id, 'ocenzurowane', ['ocenzurowany' => $masked]));
+        $this->deliver(self::verdict($id, 'ocenzurowane', ['ocenzurowany' => str_repeat('a', 2995) . ' ████']));
 
-        self::assertSame($masked . 'dkie dalszy ciąg', $this->field($id, 'comment_content'));
+        self::assertSame('0', $this->field($id, 'comment_approved'), 'the unassessed rest must not go public');
+        self::assertSame($original, $this->field($id, 'comment_content'));
+        self::assertNull($this->field($id, Meta::ORIGINAL));
+        self::assertSame('ocenzurowane', $this->field($id, Meta::STATUS));
+    }
+
+    public function testASafeCutCommentGetsTheFailureMode(): void
+    {
+        $this->configure(['failure_mode' => Settings::FAIL_CLOSED]);
+        $closed = $this->post(str_repeat('b', 3001));
+        $this->deliver(self::verdict($closed, 'bezpieczne'));
+        self::assertSame('0', $this->field($closed, 'comment_approved'));
+        self::assertSame('bezpieczne', $this->field($closed, Meta::STATUS), 'the verdict on the beginning is kept');
+        ob_start();
+        (new CommentsScreen($this->plugin->wp, $this->plugin->settings, $this->plugin->log))
+            ->renderColumn(CommentsScreen::COLUMN, $closed);
+        self::assertStringContainsString('wpis dłuższy niż 3000 znaków — oceniono początek', (string)ob_get_clean());
+
+        $this->configure(['failure_mode' => Settings::FAIL_OPEN]);
+        $open = $this->post(str_repeat('c', 3001));
+        $this->deliver(self::verdict($open, 'bezpieczne'));
+        self::assertSame('1', $this->field($open, 'comment_approved'));
+        self::assertSame('1', $this->field($open, Meta::AUTO_PUBLISHED));
+
+        // Exactly 3000 characters were assessed whole: an ordinary verdict.
+        $whole = $this->post(str_repeat('d', 3000));
+        self::assertNull($this->field($whole, Meta::CUT));
+        $this->configure(['failure_mode' => Settings::FAIL_CLOSED]);
+        $this->deliver(self::verdict($whole, 'bezpieczne'));
+        self::assertSame('1', $this->field($whole, 'comment_approved'));
+    }
+
+    public function testABlockedCutCommentIsBlocked(): void
+    {
+        $this->configure(['blocked_mode' => Settings::BLOCKED_SPAM, 'failure_mode' => Settings::FAIL_OPEN]);
+        $id = $this->post(str_repeat('e', 3500));
+
+        $this->deliver(self::verdict($id, 'zablokowane'));
+
+        self::assertSame('spam', $this->field($id, 'comment_approved'));
+    }
+
+    public function testElevenThousandApostrophesAreNeverPublishedInTheOriginal(): void
+    {
+        // Escaped, 11,000 apostrophes are 66,000 bytes: more than wpdb stores in the column.
+        $this->configure(['censored_mode' => Settings::CENSORED_PUBLISH, 'failure_mode' => Settings::FAIL_OPEN]);
+        $original = str_repeat("'", 11000);
+        $id = $this->post($original);
+
+        $this->deliver(self::verdict($id, 'ocenzurowane', ['ocenzurowany' => str_repeat('█', 3000)]));
+
+        self::assertSame('0', $this->field($id, 'comment_approved'));
+        self::assertSame($original, $this->field($id, 'comment_content'));
+        self::assertNull($this->field($id, Meta::ORIGINAL));
+        self::assertNotContains([$id, 'approve'], WpStub::$statusChanges);
+    }
+
+    public function testAMaskedTextWordPressRefusesToStoreKeepsTheCommentHeld(): void
+    {
+        $this->configure(['censored_mode' => Settings::CENSORED_PUBLISH]);
+        $original = 'krótki <b>brzydki</b> komentarz';
+        $id = $this->post($original);
+
+        // A masked text that escapes to more than 65,535 bytes: wpdb refuses it.
+        $this->deliver(self::verdict($id, 'ocenzurowane', ['ocenzurowany' => str_repeat("'", 11000)]));
+
+        self::assertSame('0', $this->field($id, 'comment_approved'), 'never published with the original');
+        self::assertSame($original, $this->field($id, 'comment_content'));
+        self::assertNull($this->field($id, Meta::ORIGINAL), 'nothing claims a masked version');
+        self::assertSame(Meta::ERROR_MASKED_WRITE, $this->field($id, Meta::ERROR));
+        $entry = $this->plugin->log->entries()[0];
+        self::assertSame([null, Meta::ERROR_MASKED_WRITE, $id], [$entry['http'], $entry['code'], $entry['comment']]);
+        self::assertStringNotContainsString('brzydki', (string)json_encode(WpStub::$options[Log::OPTION]));
+        self::assertCount(1, self::events(Outcome::HOOK_NOTIFY), 'the moderator is told');
+    }
+
+    public function testAnUpdateAFilterRefusesKeepsTheCommentHeld(): void
+    {
+        $this->configure(['censored_mode' => Settings::CENSORED_PUBLISH]);
+        add_filter('wp_update_comment_data', static function () {
+            return new \WP_Error('zablokowane_przez_wtyczke', 'Inna wtyczka nie pozwala.');
+        });
+        $id = $this->post('pierwotna brzydka treść');
+
+        $this->deliver(self::verdict($id, 'ocenzurowane', ['ocenzurowany' => 'pierwotna ███████ treść']));
+
+        self::assertSame('0', $this->field($id, 'comment_approved'));
+        self::assertSame('pierwotna brzydka treść', $this->field($id, 'comment_content'));
+        self::assertNull($this->field($id, Meta::ORIGINAL));
+        self::assertSame(Meta::ERROR_MASKED_WRITE, $this->field($id, Meta::ERROR));
+    }
+
+    public function testAMaskedTextStoredDifferentlyIsNotPublishedAndTheOriginalComesBack(): void
+    {
+        $this->configure(['censored_mode' => Settings::CENSORED_PUBLISH]);
+        $id = $this->post('pierwotna brzydka treść');
+        $append = static function ($content) {
+            return is_string($content) && strpos($content, '███') !== false ? $content . ' [dopisek]' : $content;
+        };
+        add_filter('comment_save_pre', $append);
+
+        $this->deliver(self::verdict($id, 'ocenzurowane', ['ocenzurowany' => 'pierwotna ███████ treść']));
+
+        self::assertSame('0', $this->field($id, 'comment_approved'));
+        self::assertSame('pierwotna brzydka treść', $this->field($id, 'comment_content'), 'the original is put back');
+        self::assertNull($this->field($id, Meta::ORIGINAL));
+        self::assertSame(Meta::ERROR_MASKED_WRITE, $this->field($id, Meta::ERROR));
+    }
+
+    public function testTheOriginalIsKeptWhenItCannotBePutBack(): void
+    {
+        $this->configure(['censored_mode' => Settings::CENSORED_PUBLISH]);
+        $id = $this->post('pierwotna brzydka treść');
+        add_filter('comment_save_pre', static function ($content) {
+            return $content . ' [zawsze dopisane]';
+        });
+
+        $this->deliver(self::verdict($id, 'ocenzurowane', ['ocenzurowany' => 'pierwotna ███████ treść']));
+
+        self::assertSame('0', $this->field($id, 'comment_approved'));
+        self::assertSame('pierwotna brzydka treść', $this->field($id, Meta::ORIGINAL), 'then it is the only copy');
     }
 
     public function testACensoredCommentWithoutTheMaskedTextIsHeld(): void
@@ -304,7 +426,7 @@ final class ReceiverTest extends PluginTestCase
         self::assertSame('trash', $this->field($trashed, 'comment_approved'));
     }
 
-    public function testTheHeldBackEmailFollowsTheFinalStatus(): void
+    public function testEachEmailGoesOutOnce(): void
     {
         $this->configure();
         $published = $this->post('Komentarz, który zostanie opublikowany.');
@@ -312,12 +434,43 @@ final class ReceiverTest extends PluginTestCase
 
         $this->deliver(self::verdict($published, 'bezpieczne'));
         $this->deliver(self::verdict($held, 'zablokowane'));
-        self::assertSame([], WpStub::$emails, 'the webhook answers first; e-mails go to WP-Cron');
+        // Core mails the post's author when a comment is approved.
+        self::assertSame([['postauthor', $published]], WpStub::$emails, 'the moderator\'s e-mail goes to WP-Cron');
+        self::assertSame([[$held]], array_column(self::events(Outcome::HOOK_NOTIFY), 'args'));
 
         foreach (self::events(Outcome::HOOK_NOTIFY) as $event) {
             do_action($event['hook'], ...$event['args']);
         }
         self::assertSame([['postauthor', $published], ['moderator', $held]], WpStub::$emails);
+    }
+
+    public function testAHeldCommentApprovedBeforeTheCronRunsMailsTheAuthorOnce(): void
+    {
+        $this->configure();
+        $id = $this->post('Wstrzymany, a potem zatwierdzony przez moderatora.');
+        $this->deliver(self::verdict($id, 'zablokowane'));
+
+        wp_set_comment_status($id, 'approve');
+        foreach (self::events(Outcome::HOOK_NOTIFY) as $event) {
+            do_action($event['hook'], ...$event['args']);
+        }
+
+        self::assertSame([['postauthor', $id]], WpStub::$emails);
+    }
+
+    public function testReplacingContentReportsWhatWordPressDid(): void
+    {
+        $id = WpStub::insertComment(['comment_content' => 'Treść.']);
+        $wp = $this->plugin->wp;
+
+        self::assertTrue($wp->replaceContent($id, 'Nowa treść.'));
+        self::assertFalse($wp->replaceContent($id, str_repeat('x', 65536)), 'wpdb refuses it');
+        self::assertFalse($wp->replaceContent(999, 'Brak komentarza.'));
+        add_filter('wp_update_comment_data', static function () {
+            return new \WP_Error('odmowa', 'Nie.');
+        });
+        self::assertFalse($wp->replaceContent($id, 'Odrzucona treść.'));
+        self::assertSame('Nowa treść.', $this->field($id, 'comment_content'));
     }
 
     public function testSignatureHeaderNameIsTheContracts(): void

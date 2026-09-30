@@ -51,11 +51,24 @@ final class Meta
     /** SHA-256 of the text that was sent, to notice an edit before a masked text lands. */
     public const SENT_HASH = '_minos_sent_hash';
 
+    /**
+     * `1` when the plain text was longer than the gateway assesses: only its first 3000
+     * characters were sent, so no verdict covers the whole comment.
+     */
+    public const CUT = '_minos_cut';
+
+    /**
+     * `1` while a comment stands published by the plugin's own fail-open decision, so a
+     * verdict that arrives later may still be applied to it. Any status change or edit
+     * after that publication removes it: a person's decision stands.
+     */
+    public const AUTO_PUBLISHED = '_minos_auto_published';
+
     /** Every key above: what `uninstall.php` deletes. */
     public const ALL = [
         self::STATUS, self::HELD_AT, self::SUBMITTED_AT, self::WP_APPROVED, self::RETRY_AT,
         self::ATTEMPTS, self::ORIGINAL, self::SUPPORT, self::CATEGORIES, self::ERROR,
-        self::SENT_CHARS, self::SENT_HASH,
+        self::SENT_CHARS, self::SENT_HASH, self::CUT, self::AUTO_PUBLISHED,
     ];
 
     /** {@see STATUS} of a comment waiting for its verdict (a wire-style value, Polish). */
@@ -63,4 +76,10 @@ final class Meta
 
     /** {@see STATUS} of a comment that got no verdict (the contract's `nieocenione`). */
     public const UNASSESSED = 'nieocenione';
+
+    /**
+     * {@see ERROR} when the masked text could not be written in place of the content
+     * (WordPress refused the update, or stored something else): the comment stays held.
+     */
+    public const ERROR_MASKED_WRITE = 'zapis_zamaskowanej_nieudany';
 }

@@ -61,10 +61,10 @@ final class Plugin
         $this->wp = $wp;
         $this->settings = new Settings($wp);
         $this->log = new Log($wp);
-        $this->outcome = new Outcome($wp, $this->settings);
+        $this->outcome = new Outcome($wp, $this->settings, $this->log);
         $this->submission = new Submission($wp, $this->settings, $this->outcome, $this->log);
         $this->receiver = new Receiver($wp, $this->settings, $this->outcome);
-        $this->sweeper = new Sweeper($wp, $this->submission, $this->outcome);
+        $this->sweeper = new Sweeper($wp, $this->submission, $this->outcome, $this->settings);
         $this->notice = new Notice($wp, $this->settings);
     }
 
@@ -96,6 +96,9 @@ final class Plugin
         add_action('comment_post', [$submission, 'onCommentPost'], self::SUBMIT_PRIORITY, 2);
         add_action('rest_insert_comment', [$submission, 'onRestInsertComment'], self::SUBMIT_PRIORITY, 3);
         add_filter('notify_moderator', [$this->outcome, 'filterNotifyModerator'], 10, 2);
+        // A person's status change or edit after a fail-open publication stands.
+        add_action('transition_comment_status', [$this->outcome, 'onStatusChange'], 10, 3);
+        add_action('edit_comment', [$this->outcome, 'onEdit']);
         add_action(Submission::HOOK_RETRY, [$submission, 'retry']);
         add_action(Outcome::HOOK_NOTIFY, [$this->outcome, 'notify']);
         add_filter('cron_schedules', [Sweeper::class, 'addSchedule']);

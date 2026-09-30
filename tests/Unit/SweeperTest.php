@@ -39,6 +39,7 @@ final class SweeperTest extends PluginTestCase
 
         self::assertSame(Meta::UNASSESSED, $this->field($late, Meta::STATUS));
         self::assertSame('1', $this->field($late, 'comment_approved'));
+        self::assertSame('1', $this->field($late, Meta::AUTO_PUBLISHED), 'a later verdict may still apply');
         self::assertTrue($this->pending($recent));
         self::assertSame('0', $this->field($recent, 'comment_approved'));
     }

@@ -52,7 +52,57 @@ final class SubmissionTest extends PluginTestCase
         self::assertMatchesRegularExpression('/^[A-Za-z0-9._:-]{1,64}$/', $item['id'], 'the contract\'s id rule');
         self::assertSame('Zobacz https://a.example/x i https://b.example.', $item['tekst']);
         self::assertSame('forum_teen', $item['profil']);
-        self::assertSame(['links' => 2, 'author_first_post' => true], $item['meta']);
+        self::assertSame(['links' => 2, 'link_domains' => ['a.example', 'b.example'], 'author_first_post' => true],
+            $item['meta']);
+    }
+
+    public function testLinkDomainsAreRegistrableDomainsFromTheContentOnly(): void
+    {
+        $this->configure();
+        $links = ['https://www.Sklep.Example.com.pl/oferta', 'http://forum.example.co.uk/', 'https://sub.a.example/x',
+            'https://a.example/y', 'https://192.168.0.1/', 'https://[2001:db8::1]/', 'https://user:haslo@b.example/',
+            'https://localhost/'];
+        for ($i = 0; $i < 12; $i++) {
+            $links[] = 'https://d' . $i . '.example/';
+        }
+        $this->post('Linki: ' . implode(' ', $links), 1, ['comment_author_url' => 'https://autorka.example']);
+
+        $domains = $this->sentBody()['elementy'][0]['meta']['link_domains'];
+        self::assertSame(['example.com.pl', 'example.co.uk', 'a.example', 'b.example', 'd0.example', 'd1.example',
+            'd2.example', 'd3.example', 'd4.example', 'd5.example'], $domains);
+        self::assertCount(Text::MAX_LINK_DOMAINS, $domains);
+        foreach ($domains as $domain) {
+            // The gateway's own rule for a bare domain.
+            self::assertMatchesRegularExpression('/^(?=.{4,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/', $domain);
+        }
+        self::assertStringNotContainsString('autorka', WpStub::$requests[0]['args']['body'], 'never the author\'s website');
+
+        $this->post('Bez linków.');
+        self::assertArrayNotHasKey('link_domains', $this->sentBody()['elementy'][0]['meta']);
+    }
+
+    public function testTheTextOfTitleAndAltAttributesIsAssessed(): void
+    {
+        $this->configure();
+        $this->post('<abbr title="brzydkie słowo">B.S.</abbr> i <img alt=\'obraźliwy opis\' src="x.png" />'
+            . ' <a title=podpis href="https://a.example/">link</a> wul<b>gar</b>ny <b data-title="ukryte">x</b>'
+            . ' <abbr title="a &lt;b&gt; c<d">t</abbr>');
+
+        self::assertSame('brzydkie słowo B.S. i  obraźliwy opis   podpis link wulgarny x  a <b> c<d t',
+            $this->sentBody()['elementy'][0]['tekst']);
+    }
+
+    public function testALongCommentIsMarkedAsCut(): void
+    {
+        $this->configure();
+        $long = $this->post(str_repeat('x', Text::MAX_CHARS + 1));
+        $exact = $this->post(str_repeat('y', Text::MAX_CHARS));
+        // What counts is the plain text: markup around 3000 characters does not cut it.
+        $marked = $this->post('<p><b>' . str_repeat('z', Text::MAX_CHARS) . '</b></p>');
+
+        self::assertSame('1', $this->field($long, Meta::CUT));
+        self::assertNull($this->field($exact, Meta::CUT));
+        self::assertNull($this->field($marked, Meta::CUT));
     }
 
     public function testNothingAboutTheAuthorTravels(): void
@@ -97,6 +147,7 @@ final class SubmissionTest extends PluginTestCase
         $this->post("  \n <p>" . $long . "</p> &amp; koniec \n ");
 
         $text = $this->sentBody()['elementy'][0]['tekst'];
+        self::assertSame('1', $this->field(1, Meta::CUT));
         self::assertSame(Text::MAX_CHARS, mb_strlen($text, 'UTF-8'));
         self::assertSame(str_repeat('ż', 2990) . ' ' . str_repeat('ź', 9), $text);
         self::assertStringNotContainsString('<', $text);

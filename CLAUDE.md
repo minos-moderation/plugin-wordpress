@@ -13,7 +13,9 @@ the gateway delivers to a signed webhook. Part of Minos; its backlog item is
   checklist is binding: read the raw body first, verify the signature, drop repeated
   deliveries, answer 2xx fast.
 - A PHP plugin bundles `minos-moderation/client-php` at a pinned version and never forks
-  its verification. Never send an e-mail, IP address or author id.
+  its verification. Until the client's `v0.1.0` tag exists, `composer.lock` is the pin
+  (`dev-main` at a reviewed commit): move it only with a reviewed `composer update`.
+  Never send an e-mail, IP address or author id.
 - Every WordPress call of the logic goes through `src/Platform.php`; tests stub those
   functions in `tests/stubs/wordpress.php`, so a new call needs a stub.
 

@@ -1,0 +1,35 @@
+name: Tests
+
+# Branch pushes are covered by their pull request; `main` is tested after the merge.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  php:
+    name: PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # 7.4: the oldest PHP the plugin promises to run on (forum hosts);
+        # 8.3: a current one.
+        php: ['7.4', '8.3']
+    steps:
+      - uses: actions/checkout@v5
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: curl, json, mbstring
+          coverage: none
+      - name: Lint the plugin's PHP files
+        run: find minos-moderation.php uninstall.php src tests bin -name '*.php' -print0 | xargs -0 -n1 php -l
+      - run: composer install --no-interaction --no-progress --prefer-dist
+      - run: vendor/bin/phpunit
+      - name: Build the installable zip
+        run: bin/build-zip.sh

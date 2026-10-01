@@ -1,0 +1,90 @@
+name: Release
+
+# A tag push (v*) builds the installable zip on the oldest PHP the plugin promises, proves
+# its properties (.github/scripts/check-release-archive.sh) and attaches it to the tag's
+# GitHub Release. workflow_dispatch is the dry run: the same build and checks on the chosen
+# branch against the given tag, the zip kept only as a workflow artifact.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'The tag to check the plugin version against, e.g. v0.1.0 (dry run: nothing is published)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and check the zip
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+        with:
+          persist-credentials: false
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240  # 2.37.2
+        with:
+          php-version: '7.4'
+          extensions: curl, json, mbstring
+          coverage: none
+      - name: Build the zip
+        id: build
+        # bin/build-zip.sh runs `composer install --no-dev` from composer.lock in its own
+        # staging directory; the token spares the GitHub API's anonymous rate limit.
+        env:
+          COMPOSER_AUTH: '{"github-oauth": {"github.com": "${{ secrets.GITHUB_TOKEN }}"}}'
+        run: |
+          archive="$(bash bin/build-zip.sh | tail -n 1)"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+      - name: Prove the zip's properties
+        env:
+          ARCHIVE: ${{ steps.build.outputs.archive }}
+        run: bash .github/scripts/check-release-archive.sh "$ARCHIVE" "$TAG"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: release-archive
+          path: ${{ steps.build.outputs.archive }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Attach the zip to the GitHub Release
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: release-archive
+          path: dist
+      - name: Create the release, or replace its asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          shopt -s nullglob
+          files=(dist/*.zip)
+          if [ "${#files[@]}" -ne 1 ]; then
+            echo "expected one zip in the artifact, found ${#files[@]}" >&2
+            exit 1
+          fi
+          prerelease=()
+          if [[ "$TAG" == *-* ]]; then
+            prerelease=(--prerelease)
+          fi
+          # A release the owner created with the tag already exists: only its asset changes.
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "${files[0]}" --clobber
+          else
+            gh release create "$TAG" "${files[0]}" --verify-tag --title "$TAG" --generate-notes "${prerelease[@]}"
+          fi

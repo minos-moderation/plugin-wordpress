@@ -55,17 +55,24 @@ absent 'a .git* entry' '(^|/)\.git[^/]*(/|$)'
 absent 'a CLAUDE.md' '(^|/)CLAUDE\.md$'
 absent 'a .claude/ directory' '(^|/)\.claude(/|$)'
 absent 'a .github/ directory' '(^|/)\.github(/|$)'
+absent "Composer's installed.json (the exact dependency pins)" '(^|/)installed\.json$'
 
+# The licence must be there AND say something: an empty or blank file is no licence.
 if ! grep -F -x -q -- "$licence" <<<"$listing"; then
   fail "the licence $licence is not in the archive"
+elif [ "$(unzip -p "$archive" "$licence" | tr -d '[:space:]' | wc -c)" -eq 0 ]; then
+  fail "the licence $licence in the archive is empty"
 fi
 
-# The version as WordPress reads it: get_file_data() on the first 8 KiB of the main file.
+# The version as WordPress reads it: get_file_data() on the first 8 KiB of the main file,
+# CR-only line endings turned into LF first, then trunk's header regex and
+# _cleanup_header_comment() (wp-includes/functions.php, checked on master 2026-10-01).
 version=''
 if grep -F -x -q -- "$version_file" <<<"$listing"; then
+  # shellcheck disable=SC2016  # PHP code: its $variables are PHP's, not the shell's.
   version="$(unzip -p "$archive" "$version_file" | php -r '
-    $head = substr((string) stream_get_contents(STDIN), 0, 8192);
-    if (preg_match("/^(?:[ \t]*<\?php)?[ \t\/*#@]*Version:(.*)$/mi", $head, $m)) {
+    $head = str_replace("\r", "\n", substr((string) stream_get_contents(STDIN), 0, 8192));
+    if (preg_match("/^(?:[ \t]*<\?(?:php)?)?[ \t\/*#@]*Version:(.*)$/mi", $head, $m) && $m[1]) {
         echo trim(preg_replace("/\s*(?:\*\/|\?>).*/", "", $m[1]));
     }')"
 fi

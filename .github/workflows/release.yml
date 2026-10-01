@@ -17,6 +17,11 @@ on:
 permissions:
   contents: read
 
+# One run per tag (or per dry-run ref) at a time; a second one waits instead of racing.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     name: Build and check the zip
@@ -35,6 +40,8 @@ jobs:
           coverage: none
       - name: Build the zip
         id: build
+        # bash -eo pipefail: a failing build fails this step, not the next one.
+        shell: bash
         # bin/build-zip.sh runs `composer install --no-dev` from composer.lock in its own
         # staging directory; the token spares the GitHub API's anonymous rate limit.
         env:
@@ -66,7 +73,7 @@ jobs:
         with:
           name: release-archive
           path: dist
-      - name: Create the release, or replace its asset
+      - name: Create the release with the zip
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -82,9 +89,12 @@ jobs:
           if [[ "$TAG" == *-* ]]; then
             prerelease=(--prerelease)
           fi
-          # A release the owner created with the tag already exists: only its asset changes.
+          # The release is created HERE, after the checks, never before: one that already
+          # exists was published unchecked, so the job fails instead of attaching to it.
           if gh release view "$TAG" > /dev/null 2>&1; then
-            gh release upload "$TAG" "${files[0]}" --clobber
-          else
-            gh release create "$TAG" "${files[0]}" --verify-tag --title "$TAG" --generate-notes "${prerelease[@]}"
+            echo "::error::The release $TAG already exists. This workflow creates the release itself, after the checks; create only the tag (docs/development.md, Releasing), delete that release (keep the tag) and re-run this job."
+            exit 1
           fi
+          # With an asset, gh creates a draft, uploads, then publishes: a failed upload
+          # leaves a draft, never a published release without its zip.
+          gh release create "$TAG" "${files[0]}" --verify-tag --title "$TAG" --generate-notes "${prerelease[@]}"

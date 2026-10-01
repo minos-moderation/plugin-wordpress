@@ -25,6 +25,7 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
 | `tests/EndToEnd/` | The plugin against the mock gateway over real HTTP. |
 | `tests/Repo/` | The Claude Code rules and the PHP 7.4 syntax guard. |
 | `bin/build-zip.sh` | Builds `build/minos-moderation.zip` with `vendor/` inside. |
+| `.github/workflows/release.yml` | On a `v*` tag: builds the zip, proves it with `.github/scripts/check-release-archive.sh` and attaches it to the GitHub Release. |
 
 ## How a comment travels
 
@@ -195,3 +196,32 @@ the exact versions), strips the client library down to its `src/` and `LICENSE` 
 gateway has a `public/index.php` that must never be reachable on a forum's server),
 refuses to package any development or composer file, lints every PHP file, and zips
 `minos-moderation/`.
+
+## Releasing
+
+The version lives in ONE place the release workflow checks: the `Version:` header of
+`minos-moderation.php`. The repository keeps no changelog; the release notes are GitHub's
+generated ones.
+
+1. Bump `Version:` in `minos-moderation.php` in a pull request, and merge it.
+2. The owner creates the tag `v<version>` (for `Version: 0.2.0`, `v0.2.0`) through GitHub
+   Releases: "Draft a new release", a new tag on `main`, publish. Tag pushes from Claude
+   Code sessions are refused, so a session never tags.
+3. The tag's push starts `.github/workflows/release.yml`, which builds the zip with
+   `bin/build-zip.sh` on PHP 7.4 and lists it, failing on any hit: `composer.lock`,
+   `tests/`, `phpunit*`, the mock gateway, `.git*`, `CLAUDE.md`, `.claude/`, `.github/`; it
+   also fails unless `minos-moderation/LICENSE` is inside and the zip's `Version:` header
+   equals the tag without the `v` (the message names both). Only then it attaches
+   `minos-moderation.zip` to the tag's release: it creates the release
+   (`--verify-tag`, generated notes, a pre-release for a tag with `-`) or, when the owner
+   already published one, replaces the asset (`--clobber`).
+
+A dry run before tagging: Actions → Release → "Run workflow" on a branch, with the tag to
+check the version against. It builds and checks the same way and only keeps the zip as
+the run's `release-archive` artifact (7 days). By hand:
+`bin/build-zip.sh && .github/scripts/check-release-archive.sh build/minos-moderation.zip v0.1.0`.
+
+Before the first public release, `minos-moderation/client-php` needs a tagged version
+(`v0.1.0`) that `composer.json` can require (`^0.1`); until it exists the lock pins a
+commit of `dev-main` (see "The client dependency"). Moving to the tag is its own change,
+not part of a release.

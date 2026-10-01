@@ -8,8 +8,8 @@
 # production autoloader and the client library's src/. Everything else of the library is
 # stripped — above all its mock gateway, whose public/index.php would otherwise be a
 # reachable URL on the forum's server. composer.json and composer.lock are needed only for
-# the install and are removed after it: the plugin directory is served, and they would
-# publish the exact dependency versions.
+# the install and are removed after it, with vendor/composer/installed.json: the plugin
+# directory is served, and they would publish the exact dependency versions.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -30,12 +30,17 @@ rm -f "$plugin/composer.json" "$plugin/composer.lock"
 library="$plugin/vendor/minos-moderation/client-php"
 find "$library" -mindepth 1 -maxdepth 1 ! -name src ! -name LICENSE -exec rm -rf {} +
 rm -rf "$plugin/vendor/bin"
+# Composer's installed.json lists every package at its exact version and commit, and the
+# plugin directory is served: it goes, as composer.lock does. The classmap-authoritative
+# autoloader never reads it.
+rm -f "$plugin/vendor/composer/installed.json"
 
 # Guards: the zip must work and must carry nothing it should not.
 test -f "$plugin/vendor/autoload.php"
 test -f "$library/src/Signature.php"
 if find "$plugin" \( -name mock-gateway -o -name tests -o -name .git -o -name .github \
-  -o -name CLAUDE.md -o -name phpunit -o -name composer.json -o -name composer.lock \) | grep -q .; then
+  -o -name CLAUDE.md -o -name phpunit -o -name composer.json -o -name composer.lock \
+  -o -name installed.json \) | grep -q .; then
   echo "build-zip: a development file made it into the package" >&2
   exit 1
 fi

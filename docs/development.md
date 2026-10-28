@@ -304,8 +304,10 @@ built-in server for the end-to-end test.
   unlike the standard script, which reads it as the 6.0 branch's newest test library. A
   release missing from either repository is refused, and the resolved tags and commits
   are printed. It installs into `WP_CORE_DIR` and `WP_TESTS_DIR` (by default
-  `/tmp/wordpress` and `/tmp/wordpress-tests-lib`; another version needs both
-  directories removed first). The plain `vendor/bin/phpunit` never needs MySQL.
+  `/tmp/wordpress` and `/tmp/wordpress-tests-lib`), each missing or empty: it removes no
+  directory but its own staging ones, refuses one it did not install that holds anything,
+  and reuses its own only for the same release and test configuration (another release
+  or database needs both directories removed first). The plain `vendor/bin/phpunit` never needs MySQL.
 - **PHP 7.4**: no `match`, `?->`, attributes, enums, `readonly`, union or `mixed` types,
   promoted constructors, named arguments, trailing commas in parameter lists,
   non-capturing `catch`, `str_contains` / `str_starts_with` / `str_ends_with`.

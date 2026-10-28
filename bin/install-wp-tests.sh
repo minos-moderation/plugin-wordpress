@@ -22,7 +22,10 @@
 # either repository is refused. The tags and commits it resolved are printed.
 #
 # The database is created when missing, never dropped: WordPress's test installer drops and
-# recreates its own `wptests_` tables on every run, and every test is rolled back.
+# recreates its own `wptests_` tables on every run, and every test is rolled back. Nor is
+# any directory removed but the ones it creates: an installation goes to a missing or empty
+# WP_CORE_DIR / WP_TESTS_DIR, and is reused there only for the same release and test
+# configuration (anything else is refused).
 set -euo pipefail
 
 if [ $# -lt 3 ]; then
@@ -97,36 +100,62 @@ fetch_tag() {
   echo "$repo tag $tag: commit $(git -C "$dir" rev-parse HEAD)"
 }
 
-install_core() {
-  if [ -f "$core_dir/wp-settings.php" ]; then
-    echo "WordPress already in $core_dir: $(sed -n "s/^\$wp_version = '\(.*\)';/\1/p" "$core_dir/wp-includes/version.php")"
-    return
-  fi
-  rm -rf "$core_dir"
-  fetch_tag "$core_repo" "$core_tag" "$core_dir"
-  rm -rf "$core_dir/.git"
+# What this script leaves in each directory it installs, with what it installed: a
+# directory without it is never removed or written into, and one with it is reused only for
+# the same release and the same test configuration.
+marker='.minos-install-wp-tests'
+
+# Directories and files this run created and has not put in place yet; removed on exit.
+created=()
+cleanup() {
+  local path
+  for path in ${created[@]+"${created[@]}"}; do
+    rm -rf "$path"
+  done
+}
+trap cleanup EXIT
+
+refuse() {
+  echo "$1" >&2
+  exit 1
 }
 
-install_test_library() {
-  if [ -f "$tests_dir/includes/bootstrap.php" ] && [ -f "$tests_dir/wp-tests-config.php" ]; then
-    echo "The test library already in $tests_dir"
-    return
-  fi
-  local checkout
-  checkout="$(mktemp -d)"
-  fetch_tag "$develop_repo" "$develop_tag" "$checkout" \
-    /tests/phpunit/includes/ /tests/phpunit/data/ /wp-tests-config-sample.php
-  rm -rf "$tests_dir"
-  mkdir -p "$tests_dir"
-  cp -R "$checkout/tests/phpunit/includes" "$checkout/tests/phpunit/data" "$tests_dir/"
-  cp "$checkout/wp-tests-config-sample.php" "$tests_dir/wp-tests-config.php"
-  rm -rf "$checkout"
+# Whether a path is free for an installation: missing, or an empty directory.
+vacant() {
+  [ ! -e "$1" ] || { [ -d "$1" ] && [ -z "$(ls -A "$1")" ]; }
+}
 
-  # The sample's placeholders, replaced as PHP literals: a password may hold any character.
-  php -- "$tests_dir/wp-tests-config.php" "$core_dir/" "$db_name" "$db_user" "$db_pass" "$db_host" <<'PHP'
+# Refuses a directory this script did not install that holds anything; checked for both
+# before anything is fetched or written.
+claimable() {
+  if [ ! -f "$1/$marker" ] && ! vacant "$1"; then
+    refuse "$1 is not empty and this script did not install it: choose another $2"
+  fi
+}
+
+# A new directory beside a target, on the same file system, for this run to fill.
+staging_for() {
+  local parent
+  parent="$(dirname "$1")"
+  mkdir -p "$parent"
+  mktemp -d "$parent/.$(basename "$1").XXXXXX"
+}
+
+# Puts a filled staging directory at its target, which is missing or empty.
+place() {
+  if [ -d "$2" ]; then
+    rmdir "$2"
+  fi
+  mv "$1" "$2"
+}
+
+# Writes the test configuration from the sample: its placeholders replaced as PHP literals,
+# so a password may hold any character.
+write_config() {
+  php -- "$1" "$2" "$core_dir/" "$db_name" "$db_user" "$db_pass" "$db_host" <<'PHP'
 <?php
-[, $file, $core, $name, $user, $pass, $host] = $argv;
-$config = (string)file_get_contents($file);
+[, $sample, $file, $core, $name, $user, $pass, $host] = $argv;
+$config = (string)file_get_contents($sample);
 $values = [
     "dirname( __FILE__ ) . '/src/'" => $core,
     "__DIR__ . '/src/'"             => $core,
@@ -152,6 +181,55 @@ file_put_contents($file, $config);
 PHP
 }
 
+install_core() {
+  if [ -f "$core_dir/$marker" ]; then
+    local installed
+    installed="$(sed -n "s/^\$wp_version = '\(.*\)';/\1/p" "$core_dir/wp-includes/version.php")"
+    if [ "$installed" != "$core_tag" ]; then
+      refuse "$core_dir holds WordPress $installed, not $core_tag: remove it to install another release"
+    fi
+    echo "WordPress $installed already in $core_dir"
+    return
+  fi
+  local stage
+  stage="$(staging_for "$core_dir")"
+  created+=("$stage")
+  fetch_tag "$core_repo" "$core_tag" "$stage"
+  rm -rf "$stage/.git"
+  printf 'wordpress %s\n' "$core_tag" > "$stage/$marker"
+  place "$stage" "$core_dir"
+}
+
+install_test_library() {
+  if [ -f "$tests_dir/$marker" ]; then
+    local installed wanted
+    installed="$(sed -n 's/^test-library //p' "$tests_dir/$marker")"
+    if [ "$installed" != "$develop_tag" ]; then
+      refuse "$tests_dir holds the test library $installed, not $develop_tag: remove it to install another release"
+    fi
+    wanted="$(mktemp)"
+    created+=("$wanted")
+    write_config "$tests_dir/wp-tests-config-sample.php" "$wanted"
+    if ! cmp -s "$wanted" "$tests_dir/wp-tests-config.php"; then
+      refuse "$tests_dir/wp-tests-config.php names another database or WordPress directory: remove $tests_dir to write it again"
+    fi
+    echo "Test library $installed already in $tests_dir"
+    return
+  fi
+  local checkout stage
+  checkout="$(mktemp -d)"
+  created+=("$checkout")
+  fetch_tag "$develop_repo" "$develop_tag" "$checkout" \
+    /tests/phpunit/includes/ /tests/phpunit/data/ /wp-tests-config-sample.php
+  stage="$(staging_for "$tests_dir")"
+  created+=("$stage")
+  cp -R "$checkout/tests/phpunit/includes" "$checkout/tests/phpunit/data" "$stage/"
+  cp "$checkout/wp-tests-config-sample.php" "$stage/wp-tests-config-sample.php"
+  write_config "$stage/wp-tests-config-sample.php" "$stage/wp-tests-config.php"
+  printf 'test-library %s\n' "$develop_tag" > "$stage/$marker"
+  place "$stage" "$tests_dir"
+}
+
 install_database() {
   if [ "$skip_db" = 'true' ]; then
     return
@@ -173,6 +251,8 @@ install_database() {
   echo "Database $db_name ready"
 }
 
+claimable "$core_dir" WP_CORE_DIR
+claimable "$tests_dir" WP_TESTS_DIR
 install_core
 install_test_library
 install_database

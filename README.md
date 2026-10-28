@@ -25,6 +25,11 @@ Licencja: GPL-2.0 lub nowsza (plik `LICENSE`).
    ustawienia i zaznacz **Moderacja włączona**.
 4. Przekaż operatorowi **adres webhooka** widoczny na stronie ustawień (patrz niżej).
 
+**Kopia testowa strony** (np. staging) potrzebuje własnego klucza i sekretu — poproś o nie
+operatora. Nie wpisuj tam klucza strony produkcyjnej: brama wysyła werdykty zawsze na adres
+webhooka zapisany przy kluczu, czyli na stronę produkcyjną, a numery komentarzy obu kopii
+się pokrywają, więc werdykt dla komentarza z kopii trafiłby do innego komentarza.
+
 Świeżo zainstalowana wtyczka jest wyłączona i nic nie robi: komentarze działają tak jak
 bez niej. Włączona bez poprawnego klucza API lub sekretu webhooka nie wysyła komentarzy,
 a każdy nowy komentarz od razu trafia do trybu „Gdy brak werdyktu” (przy fail-closed czeka
@@ -67,9 +72,9 @@ do bazy.
 | Adres bramy | `https://gateway.wergiliusz.app` | Zmieniaj tylko na polecenie operatora. Wymagane `https://` (`http://` tylko dla `localhost` — do testów z atrapą bramy). |
 | Klucz API | — | `wgb2b_…`. Po zapisaniu strona pokazuje tylko jego początek; puste pole przy zapisie zostawia zapisany klucz. |
 | Sekret webhooka | — | Służy wyłącznie do sprawdzania podpisu werdyktów i nigdy nie jest wysyłany. Strona pokazuje tylko jego początek. |
-| Profil oceny | `forum_adult` | `forum_adult` — forum dla dorosłych; `forum_teen` — forum z udziałem nastolatków. Klucz musi mieć dostęp do wybranego profilu. |
+| Profil oceny | `forum_adult` | `forum_adult` — forum dla dorosłych; `forum_teen` — forum dla dzieci i młodzieży. Klucz musi mieć dostęp do wybranego profilu. |
 | Gdy brak werdyktu | fail-closed | Co zrobić z komentarzem bez werdyktu: **fail-open** — opublikować, **fail-closed** — zostawić do ręcznej moderacji. Patrz niżej. |
-| Czas oczekiwania na werdykt | 20 min (najmniej 20) | Po tym czasie komentarz bez werdyktu trafia do trybu „Gdy brak werdyktu”. Brama próbuje doręczyć werdykt przez 15 minut, stąd najmniej 20 minut. Werdykt, który nadejdzie później, jest stosowany do komentarza opublikowanego przy fail-open (patrz niżej). |
+| Czas oczekiwania na werdykt | 20 min (od 20 do 1440) | Po tym czasie komentarz bez werdyktu trafia do trybu „Gdy brak werdyktu”. Brama próbuje doręczyć werdykt przez 15 minut, stąd najmniej 20 minut. Werdykt, który nadejdzie później, jest stosowany do komentarza opublikowanego przy fail-open (patrz niżej). |
 | Komentarz ocenzurowany | opublikuj wersję zamaskowaną | Opublikować tekst z fragmentami zastąpionymi znakami `█` albo zostawić komentarz do ręcznej moderacji. Oryginał zostaje zachowany w danych komentarza. Komentarz dłuższy niż 3000 znaków, komentarz z formatowaniem lub odnośnikami i komentarz, którego wersja zamaskowana nie pasuje do wysłanego tekstu, zawsze zostaje do moderacji (z wersją zamaskowaną w kolumnie **Minos**). |
 | Komentarz zablokowany | zostaw do ręcznej moderacji | Zostawić do moderacji albo oznaczyć jako spam. |
 | Pokazuj informację | włączona | Informacja pod formularzem komentarza (RODO), patrz niżej. |
@@ -82,8 +87,9 @@ do bazy.
    ostatnia — **wstrzymuje** komentarz i od razu wysyła go do oceny (co wydłuża wysłanie
    komentarza najwyżej o 10 sekund). Jeśli brama kazała właśnie poczekać, komentarz nie jest
    wysyłany od razu, tylko po przerwie, przez WP-Cron (patrz „Fail-open i fail-closed”).
-2. Brama przyjmuje komentarz (HTTP 202) i odsyła werdykt później, zwykle w ciągu kilku
-   sekund, najpóźniej w ciągu 15 minut, na adres webhooka.
+2. Brama przyjmuje komentarz (HTTP 202) i odsyła werdykt później na adres webhooka —
+   próbuje go doręczyć przez 15 minut. Ile to trwa na Twojej stronie, pokazuje sekcja
+   „Ostatnie 7 dni” w **Ustawienia → Minos** (patrz „Dziennik i błędy”).
 3. Wtyczka sprawdza podpis i stosuje werdykt:
    - **bezpieczne** — publikuje komentarz;
    - **ocenzurowane** — publikuje wersję z zamaskowanymi fragmentami albo zostawia
@@ -129,7 +135,9 @@ Zasady, które obowiązują zawsze:
 - **Powiadomienia e-mail:** moderator nie dostaje wiadomości „komentarz czeka na
   moderację” o komentarzu, który czeka tylko na werdykt. Wiadomość przychodzi dopiero
   wtedy, gdy po werdykcie komentarz zostaje w moderacji; autor wpisu dostaje jedno
-  powiadomienie o opublikowanym komentarzu, tak jak bez wtyczki.
+  powiadomienie o opublikowanym komentarzu, tak jak bez wtyczki. To powiadomienie wysyła
+  WordPress w chwili publikacji, więc gdy publikuje werdykt, e-mail wychodzi w trakcie
+  obsługi doręczenia przez webhook (wiadomość dla moderatora wysyła WP-Cron).
 - **Zamaskowany tekst** jest publikowany jako zwykły tekst i tylko w miejsce komentarza,
   który sam jest zwykłym tekstem: wersja zamaskowana musi mieć dokładnie tyle znaków, ile
   wysłany tekst, i różnić się od niego wyłącznie znakami `█`. Komentarz z formatowaniem
@@ -225,7 +233,8 @@ Pod formularzem komentarza wtyczka pokazuje informację (domyślnie):
 > prywatności tej strony.
 
 Tekst można zmienić albo wyłączyć w ustawieniach. Nie jest pokazywany osobom, których
-komentarze nie są wysyłane (moderatorom). Uzupełnij też politykę prywatności strony
+komentarze nie są wysyłane (moderatorom), ani wtedy, gdy moderacja jest wyłączona albo
+brakuje poprawnego klucza API lub sekretu webhooka. Uzupełnij też politykę prywatności strony
 o informację o automatycznej ocenie komentarzy.
 
 **Jeśli wpisałeś własny tekst informacji, przejrzyj go.** Wtyczka go nie zmienia.

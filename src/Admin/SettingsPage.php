@@ -219,7 +219,7 @@ final class SettingsPage
                 break;
             case 'profile':
                 $labels = ['forum_adult' => __('forum_adult — forum dla dorosłych', 'minos-moderation'),
-                    'forum_teen' => __('forum_teen — forum z udziałem nastolatków', 'minos-moderation')];
+                    'forum_teen' => __('forum_teen — forum dla dzieci i młodzieży', 'minos-moderation')];
                 $this->select($id, $input, $values['profile'], $labels);
                 break;
             case 'failure_mode':

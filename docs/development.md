@@ -238,7 +238,8 @@ built-in server for the end-to-end test.
 - **Unit** (`tests/Unit/`): `PluginTestCase` hooks the real `Plugin` into the stubs with a
   fixed clock. `WpStub::postComment()` runs the filter, the insert and `comment_post` as
   `wp_new_comment` does; `deliver()` signs a payload with `Signature::sign` and calls the
-  real receiver; `WpStub::answer()` queues the gateway's answers; every HTTP request,
+  real receiver; `WpStub::answer()` queues the gateway's answers (by default a `202`
+  naming every item of the request in `przyjete`); every HTTP request,
   status change, cron event and e-mail is recorded in `WpStub`.
 - **End to end** (`tests/EndToEnd/`): the mock gateway from
   `vendor/minos-moderation/client-php/mock-gateway` on one built-in server, a stand-in site

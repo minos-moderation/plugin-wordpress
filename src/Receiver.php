@@ -27,7 +27,9 @@ defined('ABSPATH') || exit;
  * 4. the verdict applied ({@see Outcome}) — only while the comment still reads as the text
  *    that was sent; a comment edited since is held for its next revision instead, which
  *    WP-Cron sends (the webhook itself never calls the gateway);
- * 5. `200` at once: the only slow step, the e-mail, goes to WP-Cron. When applying fails
+ * 5. `200` once the verdict is applied: the moderator's e-mail goes to WP-Cron. Publishing
+ *    a comment (`wp_set_comment_status`) still mails the post's author from WordPress core
+ *    within this request; that e-mail is core's own and is not moved. When applying fails
  *    with an exception (another plugin's hook), `500`: the comment still waits, so the
  *    gateway's next delivery of the verdict is applied, not dropped as a repeat.
  */

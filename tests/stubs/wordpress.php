@@ -68,6 +68,12 @@ final class WpStub
     /** @var array<int,array{0:string,1:int}> E-mails WordPress would send: kind, comment id. */
     public static $emails = [];
 
+    /**
+     * @var array<int,array{0:int,1:string}> The text of each moderator's e-mail, after the
+     *     `comment_moderation_text` filter: comment id, text.
+     */
+    public static $moderationTexts = [];
+
     /** @var array<string,array<int,array{0:callable,1:int,2:int}>> Hook → callbacks. */
     public static $hooks = [];
 
@@ -123,6 +129,7 @@ final class WpStub
         self::$events = [];
         self::$statusChanges = [];
         self::$emails = [];
+        self::$moderationTexts = [];
         self::$hooks = [];
         self::$routes = [];
         self::$settingsErrors = [];
@@ -567,12 +574,18 @@ function wpstub_transition_comment_status(string $new, string $old, int $id): vo
     }
 }
 
+/**
+ * Core sends only for a held comment, and `wp_notify_moderator` runs the e-mail's text
+ * through `comment_moderation_text` (the text and the comment id) before mailing it.
+ */
 function wp_new_comment_notify_moderator($id)
 {
     $comment = get_comment($id);
     if ($comment !== null && $comment->comment_approved === '0'
         && apply_filters('notify_moderator', true, $id)) {
         WpStub::$emails[] = ['moderator', (int)$id];
+        $text = "A new comment is waiting for your approval\r\n";
+        WpStub::$moderationTexts[] = [(int)$id, (string)apply_filters('comment_moderation_text', $text, (int)$id)];
     }
     return true;
 }

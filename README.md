@@ -76,7 +76,7 @@ do bazy.
 | Gdy brak werdyktu | fail-closed | Co zrobić z komentarzem bez werdyktu: **fail-open** — opublikować, **fail-closed** — zostawić do ręcznej moderacji. Patrz niżej. |
 | Czas oczekiwania na werdykt | 20 min (od 20 do 1440) | Po tym czasie komentarz bez werdyktu trafia do trybu „Gdy brak werdyktu”. Brama próbuje doręczyć werdykt przez 15 minut, stąd najmniej 20 minut. Werdykt, który nadejdzie później, jest stosowany do komentarza opublikowanego przy fail-open (patrz niżej). |
 | Komentarz ocenzurowany | opublikuj wersję zamaskowaną | Opublikować tekst z fragmentami zastąpionymi znakami `█` albo zostawić komentarz do ręcznej moderacji. Oryginał zostaje zachowany w danych komentarza. Komentarz dłuższy niż 3000 znaków, komentarz z formatowaniem lub odnośnikami i komentarz, którego wersja zamaskowana nie pasuje do wysłanego tekstu, zawsze zostaje do moderacji (z wersją zamaskowaną w kolumnie **Minos**). |
-| Komentarz zablokowany | zostaw do ręcznej moderacji | Zostawić do moderacji albo oznaczyć jako spam. |
+| Komentarz zablokowany | zostaw do ręcznej moderacji | Zostawić do moderacji albo oznaczyć jako spam. Komentarz z sygnałem wsparcia zawsze zostaje do moderacji (patrz „Sygnał wsparcia”). |
 | Pokazuj informację | włączona | Informacja pod formularzem komentarza (RODO), patrz niżej. |
 | Treść informacji | tekst domyślny | Zwykły tekst; puste pole oznacza tekst domyślny. |
 
@@ -102,6 +102,7 @@ do bazy.
      jest publikowany zamiast wersji zamaskowanej, a wersję zamaskowaną komentarza
      wstrzymanego widać w kolumnie **Minos**;
    - **zablokowane** — zostawia do moderacji albo oznacza jako spam (ustawienie);
+     komentarz z sygnałem wsparcia zawsze zostaje do moderacji;
    - **nieocenione** — tryb „Gdy brak werdyktu”.
 4. Werdykt i kategorie (np. `wulgaryzmy`, `spam`) widać w kolumnie **Minos** na liście
    komentarzy.
@@ -124,7 +125,9 @@ Zasady, które obowiązują zawsze:
   (minął czas oczekiwania), a werdykt nadejdzie później, wtyczka go stosuje: „zablokowane”
   przenosi komentarz do moderacji, „ocenzurowane” działa zgodnie z ustawieniem. Nie robi
   tego, jeśli w międzyczasie ktoś zmienił status komentarza; edycję opisuje rozdział
-  „Edycja komentarza”.
+  „Edycja komentarza”. Komentarz z sygnałem wsparcia zostaje opublikowany (przy
+  ustawieniu „opublikuj wersję zamaskowaną” — w wersji zamaskowanej, jeśli ta pasuje),
+  a decyzję podejmuje moderator.
 - **Werdykt dotyczy tylko wysłanego tekstu.** Przed zastosowaniem każdego werdyktu wtyczka
   sprawdza, czy komentarz nadal ma tekst, który wysłała do oceny. Jeśli nie, werdykt nie
   jest stosowany, a komentarz zostaje wstrzymany i wysłany ponownie.
@@ -270,6 +273,13 @@ w kolumnie **Minos** i pokazuje powiadomienie na liście komentarzy. **Wtyczka n
 skontaktować się z autorem** (brama nie otrzymuje żadnych danych kontaktowych) — to Ty
 decydujesz, czy odpowiedzieć, np. z informacją o telefonie zaufania 116 123 (dorośli) lub
 116 111 (dzieci i młodzież).
+
+Komentarza z sygnałem wsparcia wtyczka nigdy sama nie usuwa, nie oznacza jako spam ani nie
+zdejmuje ze strony: zostaje wstrzymany albo opublikowany, dopóki nie zdecyduje człowiek.
+Werdykt „zablokowane” zostawia go do moderacji także przy ustawieniu „oznacz jako spam”,
+a spóźniony werdykt nie cofa publikacji przy fail-open. Wiadomość e-mail do moderatora
+o komentarzu czekającym na moderację zawiera wtedy informację o sygnale wsparcia. Autor
+komentarza nie dostaje od wtyczki żadnej wiadomości.
 
 ## Dziennik i błędy
 

@@ -5,13 +5,14 @@ declare(strict_types=1);
 namespace Minos\WordPress;
 
 use Minos\Client\WebhookPayload;
+use Minos\WordPress\Admin\CommentsScreen;
 
 defined('ABSPATH') || exit;
 
 /**
  * Applies what the gateway decided, or the failure mode when it decided nothing.
  *
- * The plugin never guesses a verdict. Six rules sit on top of the administrator's
+ * The plugin never guesses a verdict. Seven rules sit on top of the administrator's
  * settings:
  * - it publishes only a comment WordPress itself would have published: a comment that the
  *   site's own rules held (manual approval, moderation keys, too many links) stays held
@@ -31,7 +32,12 @@ defined('ABSPATH') || exit;
  *   exactly it. Otherwise the comment is held, never published with its original, and the
  *   masked text waits for the moderator in {@see Meta::MASKED};
  * - the moderator's "awaiting moderation" e-mail, held back while a comment waited, goes
- *   out from WP-Cron when the outcome holds it.
+ *   out from WP-Cron when the outcome holds it;
+ * - a comment with `wsparcie` is never marked as spam nor taken off the page by the plugin
+ *   (shared rule A7): `zablokowane` holds it whatever the "blocked" setting says, and a
+ *   late verdict leaves a published one published. It stays held, or published, until a
+ *   person decides, with the support cue in the "Minos" column, in the comments screen's
+ *   notice and in the moderator's e-mail.
  *
  * The final status is written after the action, never before: when another plugin's hook
  * throws in the middle of one, the comment still waits, so the sweep, the retry or the
@@ -172,10 +178,11 @@ final class Outcome
             return;
         }
         $qualification = (string)$payload['kwalifikacja'];
-        $action = $this->action($id, $qualification);
+        $support = $payload['wsparcie'] === true;
+        $action = $this->action($id, $qualification, $support);
         $masked = is_string($payload['ocenzurowany']) ? $payload['ocenzurowany'] : null;
         if ($late) {
-            $this->applyLate($id, $qualification, $action, $masked);
+            $this->applyLate($id, $qualification, $action, $masked, $support);
             return;
         }
         // A comment a person decided on keeps that decision: only the verdict is recorded.
@@ -328,6 +335,29 @@ final class Outcome
     }
 
     /**
+     * `comment_moderation_text` filter: the moderator's "awaiting moderation" e-mail about a
+     * comment with the support cue carries the cue and what the moderator can do about it
+     * (shared rule A7). Only the moderators get it; nothing goes to the comment's author.
+     *
+     * @param mixed      $message   The e-mail's text so far.
+     * @param int|string $commentId The comment.
+     * @return mixed The text with the cue appended, or `$message` unchanged.
+     */
+    public function filterModerationText($message, $commentId)
+    {
+        try {
+            if (!is_string($message) || $this->wp->meta((int)$commentId, Meta::SUPPORT) !== '1') {
+                return $message;
+            }
+            return $message . "\r\n" . __('Sygnał wsparcia:', 'minos-moderation') . ' '
+                . CommentsScreen::supportAdvice() . "\r\n";
+        } catch (\Throwable $e) {
+            // Another plugin's meta hook: the e-mail goes out as WordPress wrote it.
+            return $message;
+        }
+    }
+
+    /**
      * The {@see HOOK_NOTIFY} action: the moderator's e-mail for a comment the outcome held.
      *
      * It runs even while moderation is switched off: it only completes an outcome applied
@@ -380,9 +410,10 @@ final class Outcome
      *
      * @param int    $id            The comment.
      * @param string $qualification The gateway's `kwalifikacja`.
+     * @param bool   $support       Whether the gateway set `wsparcie`.
      * @return string One of the action constants.
      */
-    private function action(int $id, string $qualification): string
+    private function action(int $id, string $qualification, bool $support): string
     {
         // Only the first 3000 characters were assessed: no verdict covers the rest.
         $cut = $this->wp->meta($id, Meta::CUT) === '1';
@@ -393,7 +424,9 @@ final class Outcome
                 return !$cut && $this->settings->all()['censored_mode'] === Settings::CENSORED_PUBLISH
                     ? self::PUBLISH_MASKED : self::HOLD;
             case 'zablokowane':
-                return self::BLOCK;
+                // Shared rule A7: a comment with `wsparcie` is never marked as spam by the
+                // plugin; it waits for a person in the moderation queue.
+                return $support ? self::HOLD : self::BLOCK;
             default:
                 return self::FAILURE_MODE;
         }
@@ -404,25 +437,31 @@ final class Outcome
      * (the receive timeout passed). It is applied: `ocenzurowane` as the setting says,
      * `zablokowane` by holding the comment (not by marking it as spam). A verdict that
      * publishes, or would only apply the failure mode again, leaves the comment published.
+     * So does any verdict with `wsparcie` (shared rule A7: never taken off the page by the
+     * plugin, it stays published until a person decides); a masked text that fits still
+     * replaces the content, and one that does not waits for the moderator in the meta.
      *
      * @param int         $id            The comment.
      * @param string      $qualification The gateway's `kwalifikacja`.
      * @param string      $action        What {@see action} asked.
      * @param string|null $masked        The gateway's `ocenzurowany`.
+     * @param bool        $support       Whether the gateway set `wsparcie`.
      * @return void
      */
-    private function applyLate(int $id, string $qualification, string $action, ?string $masked): void
+    private function applyLate(int $id, string $qualification, string $action, ?string $masked, bool $support): void
     {
         $comment = $this->wp->comment($id);
         if ($comment !== null && (string)$comment->comment_approved === '1'
             && $action !== self::PUBLISH && $action !== self::FAILURE_MODE
             && !($action === self::PUBLISH_MASKED && $this->replacesWithMask($id, $masked))) {
             $this->keepMask($id, $masked);
-            // Before the hold: when a hook throws after WordPress held the comment, the next
-            // delivery finds it held already and skips this step, so the e-mail must be on
-            // its way by then. A comment no longer held when it runs gets none.
-            $this->scheduleNotification($id);
-            $this->setStatus($id, 'hold');
+            if (!$support) {
+                // Before the hold: when a hook throws after WordPress held the comment, the
+                // next delivery finds it held already and skips this step, so the e-mail must
+                // be on its way by then. A comment no longer held when it runs gets none.
+                $this->scheduleNotification($id);
+                $this->setStatus($id, 'hold');
+            }
         }
         // After the action: when it fails, the next delivery of the verdict still finds the
         // comment waiting for it.

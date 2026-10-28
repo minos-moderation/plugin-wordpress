@@ -125,8 +125,18 @@ Decisions worth knowing before changing anything:
   keeps its status; only the verdict is recorded.
 - **Late verdicts.** Under fail-open the timeout publishes and sets
   `_minos_auto_published`; a verdict arriving later is applied (`zablokowane` → hold,
-  `ocenzurowane` → per setting). `transition_comment_status` clears the flag, so a
-  person's status change after the publication stands.
+  `ocenzurowane` → per setting), except that a comment with `wsparcie` stays published
+  (shared rule A7, below). `transition_comment_status` clears the flag, so a person's
+  status change after the publication stands.
+- **The support cue (shared rule A7).** `wsparcie` is recorded as `_minos_wsparcie` = `1`
+  whatever the verdict, and a comment that carries it is never marked as spam nor taken
+  off the page by the plugin: `zablokowane` holds it whatever `blocked_mode` says
+  (`Outcome::action`), and a late verdict leaves a fail-open publication published
+  (`Outcome::applyLate`; a fitting mask still replaces its content, one that does not
+  waits in `_minos_masked`). The moderators see it in the "Minos" column, in the
+  comments screen's notice (comments of the last 7 days) and, for a held comment, in the
+  "awaiting moderation" e-mail (`comment_moderation_text`, `Outcome::filterModerationText`).
+  Nothing goes to the comment's author.
 - **Revisions.** A verdict is about the text that was sent. `Submission::onEdit`
   (`edit_comment`) sends a comment again as `wp:<ID>.<n>` (`_minos_revision`, absent = 0,
   fresh `_minos_held_at`) when its text changed while it waited for its verdict, or after
@@ -192,9 +202,9 @@ Decisions worth knowing before changing anything:
   `Platform` slashes it; the stubs unslash too, and a test holds a backslash.
 - **Notifications.** A `notify_moderator` filter suppresses the "awaiting moderation" e-mail
   while a comment is `oczekuje`; when the outcome holds it, `wp_new_comment_notify_moderator`
-  runs from WP-Cron. The post's author is mailed by core itself on approval
-  (`wp_set_comment_status` hooks `wp_new_comment_notify_postauthor`), so the plugin never
-  sends that one.
+  runs from WP-Cron, and its text carries the support cue when the comment has one. The
+  post's author is mailed by core itself on approval (`wp_set_comment_status` hooks
+  `wp_new_comment_notify_postauthor`), so the plugin never sends that one.
 - **Retention (shared rule D9.11).** `Outcome::settle` records `_minos_decided_at`;
   `Retention` (hourly, `Retention::BATCH` a run, also while switched off) removes every
   `_minos_*` key of a comment settled more than 30 days ago — the original of a masked
@@ -240,7 +250,9 @@ changed; approval mails the post's author), `transition_comment_status`,
 `update_option_{$option}` (old and new value, only on a change), `pre_http_request` and the
 `schedule_event` filter (run inside `wp_remote_post` / `wp_schedule_single_event`; another
 plugin's callback may throw there), `get_comments` with `meta_compare` / `meta_type`,
-`wp_new_comment_notify_moderator`, `wp_new_comment_notify_postauthor`,
+`wp_new_comment_notify_moderator`, `comment_moderation_text` (the text and the comment id,
+in `wp_notify_moderator`; once per e-mail on 6.0, once per recipient on 7.1),
+`wp_new_comment_notify_postauthor`,
 `load_plugin_textdomain`, `register_activation_hook`, `register_deactivation_hook`,
 `WP_UNINSTALL_PLUGIN`.
 

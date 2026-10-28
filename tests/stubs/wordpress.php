@@ -45,6 +45,9 @@ final class WpStub
     /** @var array<int,array<string,mixed>> The arguments of every `get_comments`. */
     public static $queries = [];
 
+    /** @var array<int,string> The name of every option `update_option` was asked to write. */
+    public static $optionWrites = [];
+
     /** @var array<int,array|WP_Error> Answers for the next `wp_remote_post` calls. */
     public static $responses = [];
 
@@ -103,6 +106,7 @@ final class WpStub
         self::$meta = [];
         self::$requests = [];
         self::$queries = [];
+        self::$optionWrites = [];
         self::$responses = [];
         self::$network = false;
         self::$events = [];
@@ -326,6 +330,7 @@ function get_option($name, $default = false)
 /** As core: an unchanged value writes nothing; a change fires `update_option_{$name}`. */
 function update_option($name, $value, $autoload = null)
 {
+    WpStub::$optionWrites[] = $name;
     $value = apply_filters('sanitize_option_' . $name, $value, $name, $value);
     if (!array_key_exists($name, WpStub::$options)) {
         WpStub::$autoload[$name] = $autoload === null ? true : (bool)$autoload;

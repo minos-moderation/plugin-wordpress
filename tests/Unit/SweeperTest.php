@@ -178,10 +178,12 @@ final class SweeperTest extends PluginTestCase
         do_action(Sweeper::HOOK);
         self::assertSame(Meta::UNASSESSED, $this->field($waiting, Meta::STATUS), 'the sweep finds it again');
 
-        // Once done, an update step never runs again.
+        // Once done, a request reads the version and stops: no query, no write.
         WpStub::$queries = [];
+        WpStub::$optionWrites = [];
         do_action('init');
         self::assertSame([], WpStub::$queries);
+        self::assertNotContains(Upgrade::OPTION, WpStub::$optionWrites);
     }
 
     public function testACommentAPersonDecidedIsNotChangedByTheTimeout(): void

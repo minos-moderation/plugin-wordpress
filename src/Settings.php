@@ -240,7 +240,8 @@ final class Settings
      */
     public static function validKey(string $key): bool
     {
-        return (bool)preg_match('/^wgb2b_[A-Za-z0-9_-]{8,200}$/', $key);
+        // `\z`, not `$`: a `$` also matches before a trailing newline.
+        return (bool)preg_match('/^wgb2b_[A-Za-z0-9_-]{8,200}\z/', $key);
     }
 
     /**
@@ -251,7 +252,7 @@ final class Settings
      */
     public static function validSecret(string $secret): bool
     {
-        return (bool)preg_match('/^[\x21-\x7e]{16,256}$/', $secret);
+        return (bool)preg_match('/^[\x21-\x7e]{16,256}\z/', $secret);
     }
 
     /**

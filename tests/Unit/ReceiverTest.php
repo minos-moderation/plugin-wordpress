@@ -108,7 +108,7 @@ final class ReceiverTest extends PluginTestCase
     {
         $this->configure();
         $id = $this->post('Komentarz przy zbyt krótkim sekrecie.');
-        foreach (['12345678', 'sekret ze spacją 0123456789', str_repeat('x', 257)] as $invalid) {
+        foreach (['12345678', 'sekret ze spacją 0123456789', str_repeat('x', 257), self::SECRET . "\n"] as $invalid) {
             self::assertFalse(Settings::validSecret($invalid), 'the settings page refuses it');
             WpStub::$options[Settings::SECRET_OPTION] = $invalid;
 

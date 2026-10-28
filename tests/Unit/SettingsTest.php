@@ -165,6 +165,16 @@ final class SettingsTest extends PluginTestCase
         self::assertCount(2, WpStub::$settingsErrors);
     }
 
+    public function testAKeyOrASecretWithATrailingNewlineIsNotValid(): void
+    {
+        self::assertTrue(Settings::validKey(self::KEY));
+        self::assertTrue(Settings::validSecret(self::SECRET));
+        foreach (["\n", "\r\n", "\0"] as $tail) {
+            self::assertFalse(Settings::validKey(self::KEY . $tail), json_encode($tail));
+            self::assertFalse(Settings::validSecret(self::SECRET . $tail), json_encode($tail));
+        }
+    }
+
     public function testTheSecretsAreSavedThroughTheirSanitisers(): void
     {
         $this->configure();

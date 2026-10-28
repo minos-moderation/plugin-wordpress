@@ -326,9 +326,12 @@ final class Outcome
     }
 
     /**
-     * `transition_comment_status` action: a status change after the plugin's fail-open
+     * `transition_comment_status` action: a status change after the plugin's own
      * publication (a person unapproved, spammed or trashed the comment) is a decision a
-     * later verdict does not overrule.
+     * later verdict does not overrule. When the person held a comment whose publication on
+     * its verdict was unfinished (another plugin's hook threw after WordPress approved it),
+     * the comment is settled as `nieocenione` there and then: it still waited for its
+     * verdict, and the next delivery would publish it again over the person's hold.
      *
      * @param mixed $newStatus The new status.
      * @param mixed $oldStatus The old status.
@@ -337,8 +340,14 @@ final class Outcome
      */
     public function onStatusChange($newStatus, $oldStatus, $comment): void
     {
-        if (!$this->writing && is_object($comment) && isset($comment->comment_ID)) {
-            $this->forgetAutoPublication((int)$comment->comment_ID);
+        if ($this->writing || !is_object($comment) || !isset($comment->comment_ID)) {
+            return;
+        }
+        $id = (int)$comment->comment_ID;
+        $published = $this->wp->meta($id, Meta::AUTO_PUBLISHED) === '1';
+        $this->forgetAutoPublication($id);
+        if ($published && $newStatus === 'unapproved' && $this->wp->meta($id, Meta::STATUS) === Meta::PENDING) {
+            $this->settle($id, Meta::UNASSESSED);
         }
     }
 

@@ -372,6 +372,37 @@ final class FailureIsolationTest extends PluginTestCase
         return (string)ob_get_clean();
     }
 
+    public function testAPersonsHoldOfAHalfFinishedPublicationStandsAgainstTheRedelivery(): void
+    {
+        $this->threeComments([]);
+        $this->breakFor('transition_comment_status', function ($new, $old, $comment): bool {
+            return $new === 'approved' && is_object($comment) && (int)$comment->comment_ID === $this->ids[1];
+        });
+        self::assertSame(500, $this->deliver(self::verdict($this->ids[1], 'bezpieczne')));
+        self::assertSame('1', $this->field($this->ids[1], 'comment_approved'), 'WordPress approved it before the hook threw');
+
+        wp_set_comment_status($this->ids[1], 'hold');
+
+        self::assertSame(Meta::UNASSESSED, $this->field($this->ids[1], Meta::STATUS), 'settled: it waits no longer');
+        self::assertNull($this->field($this->ids[1], Meta::WAITING));
+        self::assertSame(200, $this->deliver(self::verdict($this->ids[1], 'bezpieczne')));
+        self::assertSame('0', $this->field($this->ids[1], 'comment_approved'), 'the person\'s hold stands');
+    }
+
+    public function testAPersonsHoldOfAFailOpenPublicationOnlyEndsTheWaitForALateVerdict(): void
+    {
+        $this->threeComments(['failure_mode' => Settings::FAIL_OPEN]);
+        $this->now += Settings::DEFAULT_TIMEOUT_MIN * 60;
+        do_action(Sweeper::HOOK);
+        $decidedAt = $this->field($this->ids[1], Meta::DECIDED_AT);
+        $this->now += 60;
+
+        wp_set_comment_status($this->ids[1], 'hold');
+
+        self::assertSame([Meta::UNASSESSED, $decidedAt], [$this->field($this->ids[1], Meta::STATUS), $this->field($this->ids[1], Meta::DECIDED_AT)]);
+        self::assertNull($this->field($this->ids[1], Meta::AUTO_PUBLISHED));
+    }
+
     public function testAModeratorEmailThatFailsDoesNotStopTheOthers(): void
     {
         $this->threeComments(['blocked_mode' => Settings::HOLD]);

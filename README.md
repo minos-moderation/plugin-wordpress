@@ -286,8 +286,10 @@ Komentarza z sygnałem wsparcia wtyczka nigdy sama nie usuwa, nie oznacza jako s
 zdejmuje ze strony: zostaje wstrzymany albo opublikowany, dopóki nie zdecyduje człowiek.
 Werdykt „zablokowane” zostawia go do moderacji także przy ustawieniu „oznacz jako spam”,
 a spóźniony werdykt nie cofa publikacji przy fail-open. Wiadomość e-mail do moderatora
-o komentarzu czekającym na moderację zawiera wtedy informację o sygnale wsparcia. Autor
-komentarza nie dostaje od wtyczki żadnej wiadomości.
+o komentarzu czekającym na moderację zawiera wtedy informację o sygnale wsparcia. Komentarz
+opublikowany z sygnałem wsparcia nie wywołuje e-maila (WordPress powiadamia moderatorów
+tylko o komentarzach oczekujących) — widać go w kolumnie **Minos** i w powiadomieniu na
+liście komentarzy. Autor komentarza nie dostaje od wtyczki żadnej wiadomości.
 
 ## Dziennik i błędy
 

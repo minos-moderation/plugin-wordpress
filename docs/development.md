@@ -26,6 +26,7 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
 | `tests/stubs/wordpress.php` | Hand-written stubs of the WordPress functions the plugin calls. |
 | `tests/Unit/` | The real handlers on the stubs. |
 | `tests/EndToEnd/` | The plugin against the mock gateway over real HTTP. |
+| `tests/Integration/` | The plugin on a real WordPress and its test library (`phpunit-integration.xml.dist`, installed by `bin/install-wp-tests.sh`), against the mock gateway. |
 | `tests/Repo/` | The Claude Code rules (their checker also runs on `fixtures/agents/`, agents it must reject) and the PHP 7.4 syntax guard. |
 | `bin/build-zip.sh` | Builds `build/minos-moderation.zip` with `vendor/` inside. |
 | `.github/workflows/release.yml` | On a `v*` tag: builds the zip, proves it with `.github/scripts/check-release-archive.sh` and attaches it to the GitHub Release. |
@@ -55,7 +56,9 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
      `ponow_za_s` or, without it, a doubling backoff from 60 s (at most an hour, counted
      from the most failed attempts in the request) ends, and never more than a day
      (`Log::MAX_PAUSE_S`): while nothing is sent no `202` can end it. Each comment of the
-     request is retried then (a one-off WP-Cron event, plus the sweep as a fallback), but
+     request is retried then (a one-off WP-Cron event, plus the sweep as a fallback:
+     WordPress refuses a second event for the same comment within ten minutes of one it
+     still holds, so a retry moved later than its event is sent by the sweep), but
      gets the failure mode at once when `ponow_za_s` as given (clamped at a year only to
      stay an integer) ends at or after its receive timeout (shared rule D9.3(a)). A pause
      running longer is never shortened by the answer to an earlier request; it ends with
@@ -201,7 +204,8 @@ Decisions worth knowing before changing anything:
 
 Checked against the WordPress sources at the `6.0` and `7.1.2` tags
 (`github.com/WordPress/WordPress`; `developer.wordpress.org` was not reachable from the
-build environment): `pre_comment_approved` (in `wp_allow_comment` / `wp_check_comment_data`,
+build environment), and run on a real WordPress 6.0 and the latest by the integration suite
+(see Tests): `pre_comment_approved` (in `wp_allow_comment` / `wp_check_comment_data`,
 `$commentdata` as the second argument), `comment_post` (`$comment_id, $comment_approved,
 $commentdata`), `rest_insert_comment` (`$comment, $request, $creating`), the REST server
 setting the request body from `php://input`, `WP_REST_Request::get_body()` and
@@ -237,7 +241,8 @@ vendor/bin/phpunit
 ```
 
 CI (`.github/workflows/tests.yml`) runs `php -l` over the plugin, the suite and the zip
-build on PHP 7.4 and 8.3. Every `uses:` in the workflows is pinned to a full commit SHA with
+build on PHP 7.4 and 8.3, and the integration suite in its own job, "WordPress
+integration", on WordPress 6.0 with PHP 7.4 and the latest WordPress with PHP 8.3. Every `uses:` in the workflows is pinned to a full commit SHA with
 its version in a trailing comment (`owner/action@<40-hex sha>  # v5.0.0`); to move a pin,
 resolve the new release tag to its commit (`git ls-remote https://github.com/<owner>/<action>
 refs/tags/<tag>^{}` for an annotated tag, the tag itself otherwise), check that the commit
@@ -245,8 +250,8 @@ belongs to that release, and change the SHA and the comment together in every wo
 built-in server for the end-to-end test.
 
 - **Unit** (`tests/Unit/`): `PluginTestCase` hooks the real `Plugin` into the stubs with a
-  fixed clock. `WpStub::postComment()` runs the filter, the insert and `comment_post` as
-  `wp_new_comment` does; `deliver()` signs a payload with `Signature::sign` and calls the
+  fixed clock. `WpStub::postComment()` runs the filter (twice, as WordPress 6.7+), the
+  content filters, the insert and `comment_post` as `wp_new_comment` does; `deliver()` signs a payload with `Signature::sign` and calls the
   real receiver; `WpStub::answer()` queues the gateway's answers (by default a `202`
   naming every item of the request in `przyjete`); every HTTP request,
   status change, cron event and e-mail is recorded in `WpStub`.
@@ -256,7 +261,38 @@ built-in server for the end-to-end test.
   the plugin's hooks with `wp_remote_post` sending for real, the mock's worker delivering.
   Servers start through array-form `proc_open`, and `tearDown` asserts every port closed.
 - **Stubs**: a new WordPress call goes through `Platform` and gets a stub that keeps
-  WordPress's observable behaviour (slashing, status words, header names).
+  WordPress's observable behaviour (slashing, status words, header names), and a test in
+  `tests/Integration/` that runs it on the real WordPress. What the real WordPress showed
+  the stubs got wrong is fixed there: `pre_comment_approved` runs twice from 6.7 on (once
+  before 6.7), `wp_schedule_single_event` refuses an event with the same action and
+  arguments within ten minutes of one it holds, `wp_update_comment` answers `0` when the
+  comment already read so. kses is not stubbed: a test posts content as WordPress would
+  store it.
+- **Integration** (`tests/Integration/`, `phpunit-integration.xml.dist`): the plugin on a
+  real WordPress, loaded by its main file, with WordPress's own PHPUnit test library
+  (`WP_UnitTestCase`, `yoast/phpunit-polyfills`) and a MySQL database whose changes each
+  test rolls back. Comments come in through the comment form's handler
+  (`wp_handle_comment_submission`) or the REST API, verdicts through WordPress's own REST
+  server: the mock gateway's worker delivers to a capture server
+  (`fixtures/capture.php`), and the test serves each delivery byte for byte where its
+  database transaction is. The plugin's clock is the real one, so a test that needs time
+  to pass moves the moments the plugin stored back. One test at least for each of: the
+  double `pre_comment_approved`, kses and the stored `comment_content` with the column's
+  limit, `wp_set_comment_status` / `wp_update_comment` / `transition_comment_status` and
+  the e-mails sent in the webhook's request, the REST route with the raw body, WP-Cron's
+  duplicate refusal, `get_comments` with meta and date queries, and uninstalling. To run
+  it, with a MySQL server and a user that may create the database:
+
+  ```bash
+  bin/install-wp-tests.sh wordpress_test <db-user> <db-password> 127.0.0.1:3306 6.0   # or: latest
+  vendor/bin/phpunit -c phpunit-integration.xml.dist
+  ```
+
+  The script takes WordPress from the release tag of its Git mirror
+  (`github.com/WordPress/WordPress`) and the test library from the same tag of
+  `github.com/WordPress/wordpress-develop`, into `WP_CORE_DIR` and `WP_TESTS_DIR` (by
+  default `/tmp/wordpress` and `/tmp/wordpress-tests-lib`; another version needs both
+  directories removed first). The plain `vendor/bin/phpunit` never needs MySQL.
 - **PHP 7.4**: no `match`, `?->`, attributes, enums, `readonly`, union or `mixed` types,
   promoted constructors, named arguments, trailing commas in parameter lists,
   non-capturing `catch`, `str_contains` / `str_starts_with` / `str_ends_with`.

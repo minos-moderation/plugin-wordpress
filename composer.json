@@ -17,7 +17,8 @@
     "require-dev": {
         "ext-curl": "*",
         "ext-mbstring": "*",
-        "phpunit/phpunit": "^9.6"
+        "phpunit/phpunit": "^9.6",
+        "yoast/phpunit-polyfills": "^1.1"
     },
     "autoload": {
         "psr-4": {

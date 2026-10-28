@@ -34,9 +34,10 @@ abstract class PluginTestCase extends TestCase
     protected function setUp(): void
     {
         WpStub::reset();
-        $this->plugin = new Plugin(new Platform(function (): int {
+        WpStub::$clock = function (): int {
             return $this->now;
-        }));
+        };
+        $this->plugin = new Plugin(new Platform(WpStub::$clock));
         $this->plugin->hook(__DIR__ . '/../../minos-moderation.php');
     }
 

@@ -237,6 +237,24 @@ final class SubmissionTest extends PluginTestCase
         self::assertTrue($this->pending($id));
     }
 
+    public function testWordPressesOwnDecisionIsTheLastRunOfTheFilter(): void
+    {
+        $this->configure();
+        // A rule that holds the comment only once its data is filtered (the second run).
+        $runs = 0;
+        add_filter('pre_comment_approved', static function ($approved) use (&$runs) {
+            $runs++;
+            return $runs >= 2 ? 0 : $approved;
+        }, 10);
+
+        $id = $this->post('Komentarz sprawdzany dwa razy.');
+
+        self::assertSame(2, $runs);
+        self::assertSame('0', $this->field($id, Meta::WP_APPROVED));
+        $this->deliver(self::verdict($id, 'bezpieczne'));
+        self::assertSame('0', $this->field($id, 'comment_approved'), 'never published past WordPress\'s own hold');
+    }
+
     public function testAStatusChangedByALaterFilterIsNotTheirs(): void
     {
         $this->configure();

@@ -306,3 +306,7 @@ następuje w kolejnym przebiegu.
 ## Dla programistów
 
 Budowanie, testy i praca z atrapą bramy: [`docs/development.md`](docs/development.md).
+Każda zmiana wtyczki przechodzi testy na prawdziwym WordPressie 6.0 (PHP 7.4) i najnowszym
+(PHP 8.3) — zadanie „WordPress integration” w
+[`.github/workflows/tests.yml`](.github/workflows/tests.yml) — z atrapą bramy w miejscu
+usługi Minos.

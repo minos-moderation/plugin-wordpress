@@ -257,7 +257,16 @@ decydujesz, czy odpowiedzieć, np. z informacją o telefonie zaufania 116 123 (d
 
 ## Dziennik i błędy
 
-Strona **Ustawienia → Minos** pokazuje ostatnie błędy: czas, kod HTTP, kod błędu bramy
+**Ostatnie 7 dni.** Strona **Ustawienia → Minos** pokazuje, ile komentarzy rozstrzygniętych
+w ciągu ostatnich 7 dni dostało werdykt „bezpieczne”, „ocenzurowane” i „zablokowane”, a ile
+trafiło do trybu „Gdy brak werdyktu” (w tym ile dlatego, że werdykt nie nadszedł w czasie
+oczekiwania), oraz ile czasu mija od przyjęcia komentarza przez bramę do werdyktu: medianę
+(P50) i 95. percentyl (P95), liczone dla komentarzy ocenionych, także dla werdyktu, który
+nadszedł po publikacji przy fail-open. Liczby powstają z danych, które wtyczka i tak
+przechowuje przy komentarzach (patrz „Przechowywanie danych”), przy każdym otwarciu strony:
+bez treści komentarzy, bez dodatkowych zapytań do bramy i bez zapisywania czegokolwiek.
+
+Strona **Ustawienia → Minos** pokazuje też ostatnie błędy: czas, kod HTTP, kod błędu bramy
 i numer komentarza — nigdy treść. Gdy brama odrzuca komentarze z powodu konfiguracji
 (np. `brak_klucza`, `brak_webhooka`, `profil_niedozwolony`), w panelu pojawia się
 komunikat z podpowiedzią; znika po pierwszym przyjętym komentarzu.

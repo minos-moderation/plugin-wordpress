@@ -386,8 +386,9 @@ function get_comment($comment = null, $output = OBJECT)
 }
 
 /**
- * The subset of `WP_Comment_Query` the plugin uses: status, one meta pair, user or e-mail,
- * a `comment_date_gmt` lower bound, ids or a count, a limit.
+ * The subset of `WP_Comment_Query` the plugin uses: status, one meta pair (`=`, `<`, `>=`),
+ * user or e-mail, a `comment_date_gmt` lower bound, ids, objects or a count, a limit, the
+ * order by id (descending unless `ASC`, as in core).
  */
 function get_comments($args = [])
 {
@@ -409,7 +410,8 @@ function get_comments($args = [])
                 $numeric = ($args['meta_type'] ?? '') === 'NUMERIC';
                 $left = $numeric ? (int)$meta : $meta;
                 $right = $numeric ? (int)$args['meta_value'] : (string)$args['meta_value'];
-                if (($compare === '=' && $left !== $right) || ($compare === '<' && !($left < $right))) {
+                if (($compare === '=' && $left !== $right) || ($compare === '<' && !($left < $right))
+                    || ($compare === '>=' && !($left >= $right))) {
                     continue;
                 }
             }
@@ -427,7 +429,12 @@ function get_comments($args = [])
         }
         $found[] = $id;
     }
-    sort($found);
+    // Core's default order is descending.
+    if (strtoupper((string)($args['order'] ?? 'DESC')) === 'ASC') {
+        sort($found);
+    } else {
+        rsort($found);
+    }
     if (!empty($args['count'])) {
         return count($found);
     }

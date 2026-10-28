@@ -8,11 +8,13 @@ use Minos\WordPress\Log;
 use Minos\WordPress\Meta;
 use Minos\WordPress\Receiver;
 use Minos\WordPress\Settings;
+use Minos\WordPress\Stats;
 
 defined('ABSPATH') || exit;
 
 /**
- * Ustawienia → Minos: the settings, the webhook URL to register, the state and the log.
+ * Ustawienia → Minos: the settings, the webhook URL to register, the state, the last
+ * seven days in numbers and the log.
  *
  * WordPress glue (Settings API). The key and the secret are password fields that start
  * empty: a page never shows more of them than a prefix, and an empty field keeps what is
@@ -35,16 +37,21 @@ final class SettingsPage
     /** @var Receiver */
     private $receiver;
 
+    /** @var Stats */
+    private $stats;
+
     /**
      * @param Settings $settings The settings.
      * @param Log      $log      The administrator's log.
      * @param Receiver $receiver The webhook, for its URL.
+     * @param Stats    $stats    The last seven days in numbers.
      */
-    public function __construct(Settings $settings, Log $log, Receiver $receiver)
+    public function __construct(Settings $settings, Log $log, Receiver $receiver, Stats $stats)
     {
         $this->settings = $settings;
         $this->log = $log;
         $this->receiver = $receiver;
+        $this->stats = $stats;
     }
 
     /**
@@ -290,8 +297,61 @@ final class SettingsPage
         submit_button();
         echo '</form>';
 
+        $this->renderStats();
         $this->renderLog();
         echo '</div>';
+    }
+
+    /**
+     * Prints the last seven days in numbers: comments per outcome and the time from the
+     * gateway's acceptance to the verdict. Counts and durations only.
+     *
+     * @return void
+     */
+    private function renderStats(): void
+    {
+        $stats = $this->stats->lastWeek();
+        $labels = [
+            'bezpieczne'   => __('Bezpieczne (opublikowane)', 'minos-moderation'),
+            'ocenzurowane' => __('Ocenzurowane', 'minos-moderation'),
+            'zablokowane'  => __('Zablokowane', 'minos-moderation'),
+            Meta::UNASSESSED => __('Nieocenione (tryb „gdy brak werdyktu”)', 'minos-moderation'),
+        ];
+        echo '<h2>' . esc_html__('Ostatnie 7 dni', 'minos-moderation') . '</h2>';
+        echo '<table class="widefat striped minos-moderation-stats"><tbody>';
+        foreach (Stats::OUTCOMES as $outcome) {
+            printf('<tr><th scope="row">%s</th><td>%d</td></tr>', esc_html($labels[$outcome] ?? $outcome),
+                (int)$stats['counts'][$outcome]);
+        }
+        printf('<tr><th scope="row">%s</th><td>%d</td></tr>',
+            esc_html__('w tym nieocenione, bo werdykt nie nadszedł w czasie oczekiwania', 'minos-moderation'), (int)$stats['timed_out']);
+        echo '</tbody></table>';
+        if ($stats['p50'] === null || $stats['p95'] === null) {
+            self::help(__('Czas od przyjęcia komentarza przez bramę do werdyktu: brak ocenionych komentarzy w tym okresie.', 'minos-moderation'));
+        } else {
+            self::help(sprintf(__('Czas od przyjęcia komentarza przez bramę do werdyktu (%1$d ocenionych komentarzy): mediana (P50) %2$s, 95. percentyl (P95) %3$s.', 'minos-moderation'),
+                $stats['measured'], self::duration($stats['p50']), self::duration($stats['p95'])));
+        }
+        if ($stats['limited']) {
+            self::help(sprintf(__('Liczby obejmują %d ostatnio rozstrzygniętych komentarzy.', 'minos-moderation'), Stats::LIMIT));
+        }
+    }
+
+    /**
+     * A duration as a person reads it: seconds, minutes and seconds, or hours and minutes.
+     *
+     * @param int $seconds The duration.
+     * @return string Polish text.
+     */
+    private static function duration(int $seconds): string
+    {
+        if ($seconds < 60) {
+            return sprintf(__('%d s', 'minos-moderation'), $seconds);
+        }
+        if ($seconds < 3600) {
+            return sprintf(__('%1$d min %2$d s', 'minos-moderation'), intdiv($seconds, 60), $seconds % 60);
+        }
+        return sprintf(__('%1$d h %2$d min', 'minos-moderation'), intdiv($seconds, 3600), intdiv($seconds % 3600, 60));
     }
 
     /**

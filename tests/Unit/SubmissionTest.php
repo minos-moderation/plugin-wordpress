@@ -588,7 +588,7 @@ final class SubmissionTest extends PluginTestCase
         WpStub::$currentUser = 1;
         WpStub::$userCaps[1] = ['manage_options'];
         ob_start();
-        (new SettingsPage($this->plugin->settings, $this->plugin->log, $this->plugin->receiver))->render();
+        (new SettingsPage($this->plugin->settings, $this->plugin->log, $this->plugin->receiver, $this->plugin->stats))->render();
         return (string)ob_get_clean();
     }
 

@@ -54,6 +54,9 @@ final class Plugin
     /** @var Retention */
     public $retention;
 
+    /** @var Stats */
+    public $stats;
+
     /**
      * Builds the objects.
      *
@@ -70,6 +73,7 @@ final class Plugin
         $this->sweeper = new Sweeper($wp, $this->submission, $this->outcome, $this->settings);
         $this->notice = new Notice($wp, $this->settings);
         $this->retention = new Retention($wp, $this->log);
+        $this->stats = new Stats($wp);
     }
 
     /**
@@ -146,7 +150,7 @@ final class Plugin
         });
 
         if (is_admin()) {
-            (new SettingsPage($this->settings, $this->log, $receiver))->register();
+            (new SettingsPage($this->settings, $this->log, $receiver, $this->stats))->register();
             (new CommentsScreen($wp, $this->settings, $this->log))->register();
         }
     }

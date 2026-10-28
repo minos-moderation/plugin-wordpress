@@ -272,6 +272,46 @@ class Platform
     }
 
     /**
+     * What the plugin recorded about the comments settled since a moment, the newest
+     * first: the outcome and three moments, never the comment's content. A query by value
+     * over {@see Meta::DECIDED_AT}, which only settled comments of the last 30 days carry
+     * ({@see Retention}); it runs when the settings page is shown, and primes the meta of
+     * the comments it finds in one query instead of one a comment.
+     *
+     * @param int $since Unix seconds.
+     * @param int $limit The most comments to read.
+     * @return array<int,array{status:string,submitted_at:int,decided_at:int,timed_out:bool}>
+     */
+    public function settledSince(int $since, int $limit): array
+    {
+        $comments = get_comments([
+            'status'                    => 'any',
+            'meta_key'                  => Meta::DECIDED_AT,
+            'meta_value'                => $since,
+            'meta_compare'              => '>=',
+            'meta_type'                 => 'NUMERIC',
+            'number'                    => $limit,
+            'orderby'                   => 'comment_ID',
+            'order'                     => 'DESC',
+            'update_comment_meta_cache' => true,
+        ]);
+        $rows = [];
+        foreach (is_array($comments) ? $comments : [] as $comment) {
+            $id = is_object($comment) ? (int)($comment->comment_ID ?? 0) : 0;
+            if ($id <= 0) {
+                continue;
+            }
+            $rows[] = [
+                'status'       => $this->meta($id, Meta::STATUS),
+                'submitted_at' => (int)$this->meta($id, Meta::SUBMITTED_AT),
+                'decided_at'   => (int)$this->meta($id, Meta::DECIDED_AT),
+                'timed_out'    => $this->meta($id, Meta::TIMED_OUT) === '1',
+            ];
+        }
+        return $rows;
+    }
+
+    /**
      * Every comment with a meta key, whatever its value: for a one-off upgrade only.
      *
      * @param string $key The meta key.

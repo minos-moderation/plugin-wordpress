@@ -23,7 +23,7 @@ final class SettingsTest extends PluginTestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->page = new SettingsPage($this->plugin->settings, $this->plugin->log, $this->plugin->receiver);
+        $this->page = new SettingsPage($this->plugin->settings, $this->plugin->log, $this->plugin->receiver, $this->plugin->stats);
     }
 
     public function testTheDefaults(): void

@@ -18,7 +18,8 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
 | `src/Retention.php` | WP-Cron hourly: the `_minos_*` meta of a comment settled 30 days ago goes (shared rule D9.11). |
 | `src/Text.php` | Plain text for the gateway (strip, keep `title`/`alt` text, block tags as line breaks, decode, trim, cut at 3000), link domains, whether a masked text fits, and back to safe HTML. |
 | `src/Upgrade.php` | Brings data an earlier version stored up to date, once per site (`minos_moderation_schema`). |
-| `src/Log.php` | The administrator's error log: codes and statuses, never content or secrets. |
+| `src/Log.php` | The administrator's error log: codes and statuses, never content or secrets; the shared pause. |
+| `src/Stats.php` | The last 7 days on the settings page: comments per outcome, P50/P95 of the time from `202` to the verdict, from the meta the plugin keeps. |
 | `src/Notice.php` | The privacy (RODO) notice under the comment form. |
 | `src/Admin/` | Settings → Minos, the "Minos" comments column and the admin notices. |
 | `src/Meta.php` | Every `_minos_*` comment meta key (all removed on uninstall). |
@@ -178,8 +179,10 @@ Decisions worth knowing before changing anything:
   `_minos_decided_at` by value (`meta_compare` `<`), once an hour, over the comments of the
   last 30 days; a reopened revision loses the key until its own verdict. `Upgrade` step 3
   dates comments settled before the update from `_minos_held_at`.
-- **Queries by meta value.** Only `Retention` (hourly) and `Upgrade` (once per site) ask
-  by a meta value. What runs often asks by the meta key alone, which WordPress indexes: the
+- **Queries by meta value.** Only `Retention` (hourly), `Upgrade` (once per site) and the
+  settings page's 7-day numbers (`Stats`, each time an administrator opens Settings →
+  Minos; `_minos_decided_at` ≥ a week ago, at most 2000 comments, their meta primed in one
+  query) ask by a meta value. What runs often asks by the meta key alone, which WordPress indexes: the
   sweep (every 5 minutes, `_minos_waiting`) and the support notice on the comments screen
   (every view, `_minos_wsparcie`, written only as `1`, with the comment date for the 7 days).
 - **Not done:** translation files (the source strings are Polish, in `__()` with the
@@ -197,7 +200,7 @@ setting the request body from `php://input`, `WP_REST_Request::get_body()` and
 `WP_REST_Response`, `rest_url`, `wp_remote_post` / `wp_remote_retrieve_*` / `is_wp_error`,
 `wp_schedule_single_event`, `wp_schedule_event`, `wp_next_scheduled`, `wp_unschedule_hook`,
 the `cron_schedules` filter, `get_comment`, `get_comments` (`status => any`, meta, `count`,
-`user_id`, `author_email`, `date_query`), `get_comment_meta` / `update_comment_meta` /
+`user_id`, `author_email`, `date_query`, `update_comment_meta_cache`), `get_comment_meta` / `update_comment_meta` /
 `delete_comment_meta` / `delete_metadata`, `wp_set_comment_status` (false when nothing
 changed; approval mails the post's author), `transition_comment_status`,
 `wp_update_comment` (unslashes; returns `1`/`0`, or `false`/`WP_Error`; runs

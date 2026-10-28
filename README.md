@@ -186,13 +186,23 @@ początek.
 
 Pod formularzem komentarza wtyczka pokazuje informację (domyślnie):
 
-> Komentarze są automatycznie sprawdzane przez usługę Minos. Aby ocenić komentarz,
-> przesyłamy do niej wyłącznie jego treść — bez imienia, adresu e-mail i adresu IP. Treść
-> nie jest tam przechowywana po zakończeniu oceny.
+> Komentarze są automatycznie sprawdzane przez usługę Minos. Do oceny przesyłamy tekst
+> komentarza (najwyżej 3000 znaków), liczbę linków i ich domeny oraz informację, czy to
+> pierwszy komentarz autora — nigdy imienia, adresu e-mail ani adresu IP. Tekst czeka na
+> ocenę w kolejce usługi najwyżej 30 minut, a gdy ocena się nie powiedzie, jego fragment
+> może pozostać w zaszyfrowanym dzienniku błędów do 72 godzin. Szczegóły w polityce
+> prywatności tej strony.
 
 Tekst można zmienić albo wyłączyć w ustawieniach. Nie jest pokazywany osobom, których
 komentarze nie są wysyłane (moderatorom). Uzupełnij też politykę prywatności strony
 o informację o automatycznej ocenie komentarzy.
+
+**Jeśli wpisałeś własny tekst informacji, przejrzyj go.** Wtyczka go nie zmienia.
+Wcześniejszy tekst domyślny mówił, że do usługi trafia wyłącznie treść komentarza i że
+treść nie jest przechowywana po ocenie — to nieprawda: wysyłane są też liczba linków,
+ich domeny i informacja o pierwszym komentarzu, tekst czeka w kolejce do 30 minut, a jego
+fragment może pozostać w dzienniku błędów do 72 godzin. Tekst domyślny czeka jeszcze na
+ostateczne brzmienie uzgodnione z polityką prywatności usługi Minos.
 
 ## Sygnał wsparcia
 

@@ -90,13 +90,17 @@ final class Settings
     }
 
     /**
-     * The default privacy notice shown under the comment form.
+     * The default privacy notice shown under the comment form: what the plugin sends (the
+     * text, the link count and domains, the first-comment signal; never the author's name,
+     * e-mail or IP address) and how long the service may hold the text, as Minos's privacy
+     * policy states it. It makes no claim that the text is never kept: it waits in the
+     * gateway's queue, and a fragment may stay in the error log.
      *
      * @return string Polish plain text.
      */
     public static function defaultNotice(): string
     {
-        return __('Komentarze są automatycznie sprawdzane przez usługę Minos. Aby ocenić komentarz, przesyłamy do niej wyłącznie jego treść — bez imienia, adresu e-mail i adresu IP. Treść nie jest tam przechowywana po zakończeniu oceny.', 'minos-moderation');
+        return __('Komentarze są automatycznie sprawdzane przez usługę Minos. Do oceny przesyłamy tekst komentarza (najwyżej 3000 znaków), liczbę linków i ich domeny oraz informację, czy to pierwszy komentarz autora — nigdy imienia, adresu e-mail ani adresu IP. Tekst czeka na ocenę w kolejce usługi najwyżej 30 minut, a gdy ocena się nie powiedzie, jego fragment może pozostać w zaszyfrowanym dzienniku błędów do 72 godzin. Szczegóły w polityce prywatności tej strony.', 'minos-moderation');
     }
 
     /**

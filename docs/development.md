@@ -25,7 +25,7 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
 | `tests/stubs/wordpress.php` | Hand-written stubs of the WordPress functions the plugin calls. |
 | `tests/Unit/` | The real handlers on the stubs. |
 | `tests/EndToEnd/` | The plugin against the mock gateway over real HTTP. |
-| `tests/Repo/` | The Claude Code rules and the PHP 7.4 syntax guard. |
+| `tests/Repo/` | The Claude Code rules (their checker also runs on `fixtures/agents/`, agents it must reject) and the PHP 7.4 syntax guard. |
 | `bin/build-zip.sh` | Builds `build/minos-moderation.zip` with `vendor/` inside. |
 | `.github/workflows/release.yml` | On a `v*` tag: builds the zip, proves it with `.github/scripts/check-release-archive.sh` and attaches it to the GitHub Release. |
 

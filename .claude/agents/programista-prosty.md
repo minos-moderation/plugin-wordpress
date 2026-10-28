@@ -22,6 +22,9 @@ Risk list — STOP before editing and report "needs `programista` (Opus)" with t
   `src/Settings.php` (defaults, allowed values, the failure mode, the timeout);
 - the key and secret handling: the sanitizers in `src/Admin/SettingsPage.php`,
   `Settings::prefix`, `src/Log.php`, `src/Platform.php`;
+- what leaves the site and what the plugin keeps: `src/Text.php` (the text sent, the mask
+  check), `src/Retention.php` (the 30-day removal), `src/Upgrade.php` (stored data brought
+  up to date);
 - `src/Plugin.php` (hooks and priorities), `src/Meta.php`, `src/Uninstaller.php`,
   `uninstall.php`, `minos-moderation.php`, `tests/stubs/`;
 - `.github/`, `.claude/`, `CLAUDE.md`, `composer.json`, `composer.lock`, `phpunit.xml.dist`,

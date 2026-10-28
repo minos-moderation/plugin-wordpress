@@ -1,6 +1,6 @@
 ---
 name: przeglad-mechaniczny
-description: Mechanical checks of a branch or PR of the Minos WordPress plugin - the PHPUnit suite and its skip counts, php -l, PHP 7.4 syntax, the build zip's contents, docs-vs-code consistency, renamed wire strings, the scope list of a programista-prosty PR. Use for any check a tool can decide; not for judging security logic.
+description: Mechanical checks of a branch or PR of the Minos WordPress plugin - the PHPUnit suite and its skip counts, php -l, PHP 7.4 syntax, the build zip's contents, docs-vs-code consistency, renamed wire strings, the scope list of a programista-prosty PR. Use for any check a tool can decide; not for judging security logic. Read-only by instruction; Bash runs checks.
 model: sonnet
 effort: low
 tools: Read, Grep, Glob, Bash

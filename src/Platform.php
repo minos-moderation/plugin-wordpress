@@ -310,7 +310,9 @@ class Platform
     }
 
     /**
-     * How many comments flagged for support were written since a moment.
+     * How many comments flagged for support were written since a moment. It runs on every
+     * view of the comments screen, so it asks by the meta key alone, which WordPress
+     * indexes, never by a meta value: the plugin writes {@see Meta::SUPPORT} only as `1`.
      *
      * @param int $since Unix seconds.
      * @return int The count.
@@ -320,7 +322,6 @@ class Platform
         return (int)get_comments([
             'status'     => 'any',
             'meta_key'   => Meta::SUPPORT,
-            'meta_value' => '1',
             'count'      => true,
             'date_query' => [['column' => 'comment_date_gmt', 'after' => gmdate('Y-m-d H:i:s', $since)]],
         ]);

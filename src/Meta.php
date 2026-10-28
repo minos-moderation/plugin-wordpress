@@ -56,7 +56,10 @@ final class Meta
      */
     public const MASKED = '_minos_masked';
 
-    /** `1` when the gateway flagged the comment for support (`wsparcie`). */
+    /**
+     * `1` when the gateway flagged the comment for support (`wsparcie`); never any other
+     * value, so the key alone marks the cue ({@see Platform::supportFlagsSince}).
+     */
     public const SUPPORT = '_minos_wsparcie';
 
     /** The gateway's category labels, comma separated. */

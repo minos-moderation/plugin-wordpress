@@ -149,6 +149,10 @@ Decisions worth knowing before changing anything:
   `_minos_decided_at` by value (`meta_compare` `<`), once an hour, over the comments of the
   last 30 days; a reopened revision loses the key until its own verdict. `Upgrade` step 3
   dates comments settled before the update from `_minos_held_at`.
+- **Queries by meta value.** Only `Retention` (hourly) and `Upgrade` (once per site) ask
+  by a meta value. What runs often asks by the meta key alone, which WordPress indexes: the
+  sweep (every 5 minutes, `_minos_waiting`) and the support notice on the comments screen
+  (every view, `_minos_wsparcie`, written only as `1`, with the comment date for the 7 days).
 - **Not done:** batching several comments into one request (every request carries one
   item); translation files (the source strings are Polish, in `__()` with the
   `minos-moderation` domain, and `languages/` is loaded when present).

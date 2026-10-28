@@ -51,6 +51,9 @@ final class Plugin
     /** @var Notice */
     public $notice;
 
+    /** @var Retention */
+    public $retention;
+
     /**
      * Builds the objects.
      *
@@ -63,9 +66,10 @@ final class Plugin
         $this->log = new Log($wp);
         $this->outcome = new Outcome($wp, $this->settings, $this->log);
         $this->submission = new Submission($wp, $this->settings, $this->outcome, $this->log);
-        $this->receiver = new Receiver($wp, $this->settings, $this->outcome);
+        $this->receiver = new Receiver($wp, $this->settings, $this->outcome, $this->submission);
         $this->sweeper = new Sweeper($wp, $this->submission, $this->outcome, $this->settings);
         $this->notice = new Notice($wp, $this->settings);
+        $this->retention = new Retention($wp, $this->log);
     }
 
     /**
@@ -90,19 +94,24 @@ final class Plugin
         $submission = $this->submission;
         $sweeper = $this->sweeper;
         $receiver = $this->receiver;
+        $retention = $this->retention;
         $wp = $this->wp;
 
         add_filter('pre_comment_approved', [$submission, 'holdForAssessment'], self::HOLD_PRIORITY, 2);
         add_action('comment_post', [$submission, 'onCommentPost'], self::SUBMIT_PRIORITY, 2);
         add_action('rest_insert_comment', [$submission, 'onRestInsertComment'], self::SUBMIT_PRIORITY, 3);
         add_filter('notify_moderator', [$this->outcome, 'filterNotifyModerator'], 10, 2);
-        // A person's status change or edit after a fail-open publication stands.
+        // A person's status change after a fail-open publication stands; an edit of a
+        // comment that was never assessed sends it again.
         add_action('transition_comment_status', [$this->outcome, 'onStatusChange'], 10, 3);
-        add_action('edit_comment', [$this->outcome, 'onEdit']);
+        add_action('edit_comment', [$submission, 'onEdit']);
         add_action(Submission::HOOK_RETRY, [$submission, 'retry']);
         add_action(Outcome::HOOK_NOTIFY, [$this->outcome, 'notify']);
         add_filter('cron_schedules', [Sweeper::class, 'addSchedule']);
         add_action(Sweeper::HOOK, [$sweeper, 'run']);
+        add_action(Retention::HOOK, [$retention, 'run']);
+        // Switching moderation on again sends what was waiting, with a fresh timeout.
+        add_action('update_option_' . Settings::OPTION, [$submission, 'onSettingsSaved'], 10, 2);
         add_action('comment_form', [$this->notice, 'render']);
         add_action('rest_api_init', static function () use ($receiver): void {
             register_rest_route(Receiver::REST_NAMESPACE, Receiver::ROUTE, [
@@ -112,16 +121,22 @@ final class Plugin
                 'permission_callback' => '__return_true',
             ]);
         });
-        add_action('init', static function () use ($file, $sweeper): void {
+        $upgrade = new Upgrade($wp);
+        add_action('init', static function () use ($file, $sweeper, $upgrade, $retention): void {
             load_plugin_textdomain(self::TEXT_DOMAIN, false, dirname(plugin_basename($file)) . '/languages');
+            // An update replaces the files without activating the plugin again.
+            $upgrade->run();
             $sweeper->ensureScheduled();
+            $retention->ensureScheduled();
         });
 
-        register_activation_hook($file, static function () use ($wp, $sweeper): void {
+        register_activation_hook($file, static function () use ($wp, $sweeper, $upgrade, $retention): void {
             // Created non-autoloaded, so the secrets are not loaded on every request.
             $wp->addOption(Settings::KEY_OPTION, '');
             $wp->addOption(Settings::SECRET_OPTION, '');
+            $upgrade->run();
             $sweeper->ensureScheduled();
+            $retention->ensureScheduled();
         });
         register_deactivation_hook($file, static function () use ($wp): void {
             // Comments still waiting stay held for manual moderation.
@@ -143,6 +158,6 @@ final class Plugin
      */
     public static function cronHooks(): array
     {
-        return [Sweeper::HOOK, Submission::HOOK_RETRY, Outcome::HOOK_NOTIFY];
+        return [Sweeper::HOOK, Submission::HOOK_RETRY, Outcome::HOOK_NOTIFY, Retention::HOOK];
     }
 }

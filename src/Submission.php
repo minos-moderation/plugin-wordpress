@@ -15,7 +15,8 @@ defined('ABSPATH') || exit;
  * moderated, and left exactly as WordPress decided: comments by users who may moderate
  * comments (they can publish them anyway), comments WordPress already marked as spam or
  * trash or refused, pingbacks, trackbacks and other comment types, and everything while
- * the plugin is switched off or has no key or secret.
+ * the plugin is switched off. Switched on without a usable key or secret, it sends
+ * nothing and gives every new comment the failure mode at once.
  *
  * What travels is the comment's id, its plain text (the first 3000 characters; a longer
  * comment is marked {@see Meta::CUT} and no verdict publishes it), the profile, and spam
@@ -24,7 +25,14 @@ defined('ABSPATH') || exit;
  * or user id.
  *
  * While moderation is switched off nothing is sent, not even a retry: comments already
- * waiting stay in WordPress's moderation queue for a person.
+ * waiting stay in WordPress's moderation queue for a person. Switching it on again sends
+ * them again, each as its next revision with a fresh receive timeout ({@see onSettingsSaved}).
+ *
+ * An edit that changes the text of a comment still waiting for its verdict, or of one the
+ * receive timeout left without an assessment (held, or published under fail-open), sends
+ * it again as its next revision, `wp:<id>.<n>`; a published one goes back to hold while
+ * the new text is assessed. An edit of a comment the gateway assessed is a person's
+ * decision and is not sent.
  */
 final class Submission
 {
@@ -42,6 +50,12 @@ final class Submission
 
     /** The longest retry pause. */
     public const MAX_BACKOFF_S = 3600;
+
+    /**
+     * The most waiting comments switching the plugin on again sends again (a day of the
+     * paid plan's limit); any beyond keep their old timeout.
+     */
+    public const RESUME_BATCH = 1000;
 
     /** The comment types the plugin moderates ('' is the legacy spelling of a comment). */
     private const TYPES = ['comment', ''];
@@ -100,7 +114,7 @@ final class Submission
     {
         $this->held = null;
         if (!in_array($approved, [0, 1, '0', '1'], true) || !is_array($commentdata)
-            || !$this->settings->isActive()) {
+            || !$this->settings->all()['enabled']) {
             return $approved;
         }
         if (!in_array((string)($commentdata['comment_type'] ?? ''), self::TYPES, true)) {
@@ -142,6 +156,135 @@ final class Submission
     }
 
     /**
+     * `edit_comment` action: an edit that changed the text of a comment that was never
+     * assessed sends it again ({@see reassess}). The plugin's own write of a masked text is
+     * not an edit; an edit of an assessed comment is the editor's decision; while the plugin
+     * is switched off an edit only ends a fail-open publication's wait for a late verdict.
+     *
+     * @param int|string $commentId The comment.
+     * @return void
+     */
+    public function onEdit($commentId): void
+    {
+        $id = (int)$commentId;
+        if ($id <= 0 || $this->outcome->writing()) {
+            return;
+        }
+        $status = $this->wp->meta($id, Meta::STATUS);
+        $unassessed = $status === Meta::PENDING
+            || ($status === Meta::UNASSESSED && $this->wp->meta($id, Meta::TIMED_OUT) === '1');
+        if (!$this->settings->all()['enabled'] || !$unassessed) {
+            $this->outcome->forgetAutoPublication($id);
+            return;
+        }
+        // Not sent yet, or the text is unchanged (an edit of the author's name, say): the
+        // revision on its way is still the right one.
+        if ($this->wp->meta($id, Meta::SENT_HASH) === '' || $this->outcome->readsAsSent($id)) {
+            return;
+        }
+        $this->reassess($id);
+    }
+
+    /**
+     * `update_option_{settings}` action: switching moderation on again sends what was
+     * waiting when it was switched off, each as its next revision with a fresh receive
+     * timeout (shared rule D9.13), from WP-Cron rather than in the administrator's request.
+     * A comment a person decided on meanwhile is left to that decision.
+     *
+     * @param mixed $old The settings before.
+     * @param mixed $new The settings now.
+     * @return void
+     */
+    public function onSettingsSaved($old, $new): void
+    {
+        $was = Settings::normalise(is_array($old) ? $old : [])['enabled'];
+        $is = Settings::normalise(is_array($new) ? $new : [])['enabled'];
+        if ($was || !$is) {
+            return;
+        }
+        foreach ($this->wp->pendingCommentIds(self::RESUME_BATCH) as $id) {
+            try {
+                if (!$this->reassessLater($id)) {
+                    $this->outcome->abandon($id);
+                }
+            } catch (\Throwable $e) {
+                // Left waiting: the sweep gives it the failure mode once its old timeout is past.
+                $this->outcome->failed(Log::STEP_SUBMIT, $id);
+            }
+        }
+    }
+
+    /**
+     * Sends a comment again as its next revision, because its text is no longer the one
+     * that was sent. A comment the plugin published under fail-open goes back to hold while
+     * the new text is assessed.
+     *
+     * @param int $id The comment.
+     * @return bool False when the comment is gone or a person decided on it meanwhile
+     *     (approved, spammed or trashed it): then nothing is sent.
+     */
+    public function reassess(int $id): bool
+    {
+        if (!$this->reopen($id)) {
+            return false;
+        }
+        $this->submitIsolated($id);
+        return true;
+    }
+
+    /**
+     * {@see reassess}, with the request left to WP-Cron: for the webhook, which answers the
+     * gateway at once, and for switching the plugin on again. The retry is due now; the
+     * sweep sends it too if its event is lost.
+     *
+     * @param int $id The comment.
+     * @return bool False when the comment is gone or a person decided on it meanwhile.
+     */
+    public function reassessLater(int $id): bool
+    {
+        if (!$this->reopen($id)) {
+            return false;
+        }
+        $this->wp->setMeta($id, Meta::RETRY_AT, $this->wp->now());
+        $this->wp->scheduleOnce($this->wp->now(), self::HOOK_RETRY, [$id]);
+        return true;
+    }
+
+    /**
+     * Starts the next revision of a held comment, or of one the plugin published under
+     * fail-open (held again), with a fresh receive timeout.
+     *
+     * @param int $id The comment.
+     * @return bool Whether the comment now waits for the new revision's verdict.
+     */
+    private function reopen(int $id): bool
+    {
+        $comment = $this->wp->comment($id);
+        if ($comment === null) {
+            return false;
+        }
+        $approved = (string)$comment->comment_approved;
+        if ($approved === '1' && $this->wp->meta($id, Meta::AUTO_PUBLISHED) === '1') {
+            $this->wp->deleteMeta($id, Meta::AUTO_PUBLISHED);
+            if (!$this->wp->setStatus($id, 'hold')) {
+                $this->wp->setMeta($id, Meta::AUTO_PUBLISHED, '1');
+                return false;
+            }
+        } elseif ($approved !== '0') {
+            return false;
+        }
+        $this->wp->setMeta($id, Meta::REVISION, (int)$this->wp->meta($id, Meta::REVISION) + 1);
+        $this->wp->setMeta($id, Meta::STATUS, Meta::PENDING);
+        $this->wp->setMeta($id, Meta::WAITING, '1');
+        $this->wp->setMeta($id, Meta::HELD_AT, $this->wp->now());
+        foreach ([Meta::SUBMITTED_AT, Meta::RETRY_AT, Meta::ATTEMPTS, Meta::SENT_HASH, Meta::SENT_CHARS,
+            Meta::TIMED_OUT, Meta::ERROR, Meta::DECIDED_AT] as $key) {
+            $this->wp->deleteMeta($id, $key);
+        }
+        return true;
+    }
+
+    /**
      * {@see HOOK_RETRY} action: a retry that fell due.
      *
      * @param int|string $commentId The comment.
@@ -150,10 +293,15 @@ final class Submission
     public function retry($commentId): void
     {
         $id = (int)$commentId;
-        $retryAt = $this->wp->meta($id, Meta::RETRY_AT);
-        if ($this->wp->meta($id, Meta::STATUS) === Meta::PENDING && $retryAt !== ''
-            && (int)$retryAt <= $this->wp->now() && !$this->pastDeadline($id)) {
-            $this->submit($id);
+        try {
+            $retryAt = $this->wp->meta($id, Meta::RETRY_AT);
+            if ($this->wp->meta($id, Meta::STATUS) === Meta::PENDING && $retryAt !== ''
+                && (int)$retryAt <= $this->wp->now() && !$this->pastDeadline($id)) {
+                $this->submit($id);
+            }
+        } catch (\Throwable $e) {
+            // The retry stays due, so the sweep sends it; WP-Cron's other events still run.
+            $this->outcome->failed(Log::STEP_SUBMIT, $id);
         }
     }
 
@@ -166,11 +314,22 @@ final class Submission
      */
     public function pastDeadline(int $id): bool
     {
+        return $this->wp->now() >= $this->deadline($id);
+    }
+
+    /**
+     * When a pending comment's receive timeout ends ({@see pastDeadline}).
+     *
+     * @param int $id The comment.
+     * @return int Unix seconds.
+     */
+    private function deadline(int $id): int
+    {
         $since = $this->wp->meta($id, Meta::SUBMITTED_AT);
         if ($since === '') {
             $since = $this->wp->meta($id, Meta::HELD_AT);
         }
-        return $this->wp->now() >= (int)$since + $this->settings->timeoutS();
+        return (int)$since + $this->settings->timeoutS();
     }
 
     /**
@@ -191,8 +350,13 @@ final class Submission
         $key = $this->settings->apiKey();
         $plain = Text::plain((string)$comment->comment_content);
         $text = Text::cut($plain);
-        if ($text === '' || $key === '') {
-            // Nothing to assess, or nothing to assess it with: no verdict, no guess.
+        if (!$this->settings->usable()) {
+            // Nothing to assess it with, nor to check its verdict: no verdict, no guess.
+            $this->outcome->withoutVerdict($id, Meta::ERROR_NOT_CONFIGURED);
+            return self::REFUSED;
+        }
+        if ($text === '') {
+            // Nothing to assess: no verdict, no guess.
             $this->outcome->withoutVerdict($id, null);
             return self::REFUSED;
         }
@@ -203,7 +367,6 @@ final class Submission
         }
         $this->wp->setMeta($id, Meta::SENT_CHARS, mb_strlen($text, 'UTF-8'));
         $this->wp->setMeta($id, Meta::SENT_HASH, hash('sha256', $text));
-        $this->wp->deleteMeta($id, Meta::RETRY_AT);
 
         $answer = $this->wp->post(
             $this->settings->all()['gateway_url'] . self::PATH,
@@ -235,11 +398,23 @@ final class Submission
         }
         $meta['author_first_post'] = $this->wp->approvedCommentsBy($userId, $email) === 0;
         return [
-            'id'     => 'wp:' . (int)$comment->comment_ID,
+            'id'     => self::itemId((int)$comment->comment_ID, (int)$this->wp->meta((int)$comment->comment_ID, Meta::REVISION)),
             'tekst'  => $text,
             'profil' => $this->settings->all()['profile'],
             'meta'   => $meta,
         ];
+    }
+
+    /**
+     * The item id of a comment's revision: `wp:<id>`, and `wp:<id>.<n>` after the first.
+     *
+     * @param int $id       The comment.
+     * @param int $revision The revision.
+     * @return string The id.
+     */
+    public static function itemId(int $id, int $revision): string
+    {
+        return 'wp:' . $id . ($revision > 0 ? '.' . $revision : '');
     }
 
     /**
@@ -258,9 +433,34 @@ final class Submission
             return;
         }
         $this->wp->setMeta($id, Meta::STATUS, Meta::PENDING);
+        $this->wp->setMeta($id, Meta::WAITING, '1');
         $this->wp->setMeta($id, Meta::HELD_AT, $this->wp->now());
         $this->wp->setMeta($id, Meta::WP_APPROVED, $wordpress);
-        $this->submit($id);
+        $this->submitIsolated($id);
+    }
+
+    /**
+     * Sends a comment where an exception must not escape: in the author's or the editor's
+     * request, or in the webhook's. A failure is recorded by step and comment id, and the
+     * comment is left due for a retry, which the sweep sends.
+     *
+     * @param int $id The comment.
+     * @return void
+     */
+    private function submitIsolated(int $id): void
+    {
+        try {
+            $this->submit($id);
+        } catch (\Throwable $e) {
+            $this->outcome->failed(Log::STEP_SUBMIT, $id);
+            try {
+                if ($this->wp->meta($id, Meta::RETRY_AT) === '') {
+                    $this->wp->setMeta($id, Meta::RETRY_AT, $this->wp->now() + self::FIRST_BACKOFF_S);
+                }
+            } catch (\Throwable $ignored) {
+                // The receive timeout still gives the comment its failure mode.
+            }
+        }
     }
 
     /**
@@ -268,19 +468,25 @@ final class Submission
      *
      * - `202`: accepted; the verdict will come to the webhook.
      * - `429`, `5xx` or no answer: kept pending, retried after `ponow_za_s` or a doubling
-     *   backoff.
+     *   backoff; but when the gateway's `ponow_za_s`, as given, ends at or after the
+     *   comment's receive timeout, no verdict can come in time and the failure mode applies
+     *   at once (shared rule D9.3(a)). A daily limit or an overload is also kept for the
+     *   administrator's notice ({@see Log::pause}).
      * - anything else: a configuration error (the key, the webhook, the URL); retrying will
      *   not help, so the failure mode applies and the administrator is told.
      *
      * @param int         $id     The comment.
      * @param int|null    $status The HTTP status, or null when no answer came.
      * @param string      $body   The answer's body.
-     * @return string {@see ACCEPTED}, {@see RETRY} or {@see REFUSED}.
+     * @return string {@see ACCEPTED}, {@see RETRY} (the gateway asked to wait, whether the
+     *     comment waits or its wait could not end in time) or {@see REFUSED}.
      */
     private function handleAnswer(int $id, ?int $status, string $body): string
     {
         if ($status === 202) {
             $this->wp->setMeta($id, Meta::SUBMITTED_AT, $this->wp->now());
+            // Removed only now: a request that fails on the way leaves the retry due.
+            $this->wp->deleteMeta($id, Meta::RETRY_AT);
             $this->wp->deleteMeta($id, Meta::ATTEMPTS);
             $this->log->clearConfigError();
             return self::ACCEPTED;
@@ -288,6 +494,16 @@ final class Submission
         $error = self::error($body);
         $this->log->record($id, $status, $error['kod']);
         if ($status === null || $status === 429 || $status >= 500) {
+            $asked = $error['asked_s'];
+            if ($asked !== null) {
+                $this->log->pause($error['kod'], $this->wp->now() + $asked);
+                if ($this->wp->now() + $asked >= $this->deadline($id)) {
+                    // The gateway refuses until after this comment's time-out: waiting
+                    // for it changes nothing but the 20 minutes.
+                    $this->outcome->timedOut($id, $error['kod'] ?? 'http_' . (int)$status);
+                    return self::RETRY;
+                }
+            }
             $attempts = (int)$this->wp->meta($id, Meta::ATTEMPTS) + 1;
             $pause = $error['ponow_za_s'] ?? min(self::MAX_BACKOFF_S, self::FIRST_BACKOFF_S * 2 ** min(20, $attempts - 1));
             $at = $this->wp->now() + $pause;
@@ -305,7 +521,9 @@ final class Submission
      * The code and the retry pause of a refusal, `{"blad": {"kod", "ponow_za_s"?}}`.
      *
      * @param string $body The answer's body.
-     * @return array{kod:string|null,ponow_za_s:int|null} What could be read.
+     * @return array{kod:string|null,ponow_za_s:int|null,asked_s:int|null} What
+     *     could be read: the pause the plugin waits (capped at a day) and the one the
+     *     gateway gave.
      */
     private static function error(string $body): array
     {
@@ -313,9 +531,11 @@ final class Submission
         $error = is_array($decoded) && is_array($decoded['blad'] ?? null) ? $decoded['blad'] : [];
         $code = is_string($error['kod'] ?? null) ? Log::safeCode($error['kod']) : null;
         $retry = $error['ponow_za_s'] ?? null;
+        $asked = is_int($retry) && $retry > 0 ? $retry : null;
         return [
             'kod'        => $code,
-            'ponow_za_s' => is_int($retry) && $retry > 0 ? min($retry, 86400) : null,
+            'ponow_za_s' => $asked === null ? null : min($asked, 86400),
+            'asked_s'    => $asked,
         ];
     }
 }

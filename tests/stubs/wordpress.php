@@ -42,6 +42,12 @@ final class WpStub
     /** @var array<int,array{url:string,args:array}> Every `wp_remote_post`. */
     public static $requests = [];
 
+    /** @var array<int,array<string,mixed>> The arguments of every `get_comments`. */
+    public static $queries = [];
+
+    /** @var array<int,string> The name of every option `update_option` was asked to write. */
+    public static $optionWrites = [];
+
     /** @var array<int,array|WP_Error> Answers for the next `wp_remote_post` calls. */
     public static $responses = [];
 
@@ -99,6 +105,8 @@ final class WpStub
         self::$comments = [];
         self::$meta = [];
         self::$requests = [];
+        self::$queries = [];
+        self::$optionWrites = [];
         self::$responses = [];
         self::$network = false;
         self::$events = [];
@@ -319,13 +327,23 @@ function get_option($name, $default = false)
     return array_key_exists($name, WpStub::$options) ? WpStub::$options[$name] : $default;
 }
 
+/** As core: an unchanged value writes nothing; a change fires `update_option_{$name}`. */
 function update_option($name, $value, $autoload = null)
 {
+    WpStub::$optionWrites[] = $name;
     $value = apply_filters('sanitize_option_' . $name, $value, $name, $value);
     if (!array_key_exists($name, WpStub::$options)) {
         WpStub::$autoload[$name] = $autoload === null ? true : (bool)$autoload;
+        WpStub::$options[$name] = $value;
+        do_action('add_option_' . $name, $name, $value);
+        return true;
+    }
+    $old = WpStub::$options[$name];
+    if ($old === $value) {
+        return false;
     }
     WpStub::$options[$name] = $value;
+    do_action('update_option_' . $name, $old, $value, $name);
     return true;
 }
 
@@ -358,6 +376,7 @@ function get_comment($comment = null, $output = OBJECT)
  */
 function get_comments($args = [])
 {
+    WpStub::$queries[] = $args;
     $statuses = ['approve' => ['1'], 'hold' => ['0'], 'all' => ['0', '1'], 'spam' => ['spam'], 'trash' => ['trash']];
     $status = $args['status'] ?? 'all';
     $found = [];
@@ -367,8 +386,17 @@ function get_comments($args = [])
         }
         if (isset($args['meta_key'])) {
             $meta = WpStub::$meta[$id][$args['meta_key']] ?? null;
-            if ($meta === null || (isset($args['meta_value']) && $meta !== $args['meta_value'])) {
+            if ($meta === null) {
                 continue;
+            }
+            if (isset($args['meta_value'])) {
+                $compare = $args['meta_compare'] ?? '=';
+                $numeric = ($args['meta_type'] ?? '') === 'NUMERIC';
+                $left = $numeric ? (int)$meta : $meta;
+                $right = $numeric ? (int)$args['meta_value'] : (string)$args['meta_value'];
+                if (($compare === '=' && $left !== $right) || ($compare === '<' && !($left < $right))) {
+                    continue;
+                }
             }
         }
         if (isset($args['user_id']) && (int)$row['user_id'] !== (int)$args['user_id']) {
@@ -541,8 +569,13 @@ function current_user_can($capability, ...$args)
 
 // --- HTTP ----------------------------------------------------------------------------
 
+/** As `WP_Http::request`: `pre_http_request` may answer (or throw) before anything is sent. */
 function wp_remote_post($url, $args = [])
 {
+    $pre = apply_filters('pre_http_request', false, $args, $url);
+    if ($pre !== false) {
+        return $pre;
+    }
     WpStub::$requests[] = ['url' => $url, 'args' => $args];
     if (WpStub::$network) {
         $headers = [];
@@ -590,8 +623,14 @@ function is_wp_error($thing)
 
 // --- WP-Cron -------------------------------------------------------------------------
 
+/** As core: the `schedule_event` filter sees the event first and may drop it (or throw). */
 function wp_schedule_single_event($timestamp, $hook, $args = [], $wpError = false)
 {
+    $event = apply_filters('schedule_event', (object)['hook' => $hook, 'timestamp' => (int)$timestamp,
+        'schedule' => false, 'args' => $args]);
+    if (!$event) {
+        return false;
+    }
     WpStub::$events[] = ['at' => (int)$timestamp, 'hook' => $hook, 'args' => $args, 'recurrence' => null];
     return true;
 }

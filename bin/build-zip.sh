@@ -8,8 +8,8 @@
 # production autoloader and the client library's src/. Everything else of the library is
 # stripped — above all its mock gateway, whose public/index.php would otherwise be a
 # reachable URL on the forum's server. composer.json and composer.lock are needed only for
-# the install and are removed after it, with vendor/composer/installed.json: the plugin
-# directory is served, and they would publish the exact dependency versions.
+# the install and are removed after it, with vendor/composer/installed.json (see below).
+# vendor/composer/installed.php stays (see below too).
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -30,9 +30,13 @@ rm -f "$plugin/composer.json" "$plugin/composer.lock"
 library="$plugin/vendor/minos-moderation/client-php"
 find "$library" -mindepth 1 -maxdepth 1 ! -name src ! -name LICENSE -exec rm -rf {} +
 rm -rf "$plugin/vendor/bin"
-# Composer's installed.json lists every package at its exact version and commit, and the
-# plugin directory is served: it goes, as composer.lock does. The classmap-authoritative
-# autoloader never reads it.
+# Composer's installed.json is a static file that lists every package at its exact version
+# and commit, readable as text wherever the plugin directory is served: it goes, as
+# composer.lock does, and nothing at run time reads it. vendor/composer/installed.php stays
+# on purpose: it is PHP code that returns an array, which Composer\InstalledVersions reads
+# when asked for the installed versions; requested over HTTP it prints nothing, and what it
+# holds is the version and commit of the public, MIT-licensed client library — nothing
+# about the site.
 rm -f "$plugin/vendor/composer/installed.json"
 
 # Guards: the zip must work and must carry nothing it should not.

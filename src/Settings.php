@@ -69,8 +69,8 @@ final class Settings
     }
 
     /**
-     * The defaults of a fresh installation. The plugin starts switched off: it holds no
-     * comment until the administrator has entered a key and a secret and switched it on.
+     * The defaults of a fresh installation. The plugin starts switched off (shared rule
+     * D9.12): it holds no comment until the administrator switches it on.
      *
      * @return array<string,mixed> Setting name → value.
      */
@@ -90,13 +90,17 @@ final class Settings
     }
 
     /**
-     * The default privacy notice shown under the comment form.
+     * The default privacy notice shown under the comment form: what the plugin sends (the
+     * text, the link count and domains, the first-comment signal; never the author's name,
+     * e-mail or IP address) and how long the service may hold the text, as Minos's privacy
+     * policy states it. It makes no claim that the text is never kept: it waits in the
+     * gateway's queue, and a fragment may stay in the error log.
      *
      * @return string Polish plain text.
      */
     public static function defaultNotice(): string
     {
-        return __('Komentarze są automatycznie sprawdzane przez usługę Minos. Aby ocenić komentarz, przesyłamy do niej wyłącznie jego treść — bez imienia, adresu e-mail i adresu IP. Treść nie jest tam przechowywana po zakończeniu oceny.', 'minos-moderation');
+        return __('Komentarze są automatycznie sprawdzane przez usługę Minos. Do oceny przesyłamy tekst komentarza (najwyżej 3000 znaków), liczbę linków i ich domeny oraz informację, czy to pierwszy komentarz autora — nigdy imienia, adresu e-mail ani adresu IP. Tekst czeka na ocenę w kolejce usługi najwyżej 30 minut, a gdy ocena się nie powiedzie, jego fragment może pozostać w zaszyfrowanym dzienniku błędów do 72 godzin. Szczegóły w polityce prywatności tej strony.', 'minos-moderation');
     }
 
     /**
@@ -141,13 +145,27 @@ final class Settings
     }
 
     /**
-     * Whether the plugin holds and submits comments: switched on, with a key and a secret.
+     * Whether the plugin can submit comments and check verdicts: switched on, with a key
+     * and a webhook secret the settings form would accept. Switched on without them, it
+     * still holds new comments, and gives each the failure mode at once (shared rule
+     * D9.12); the gateway's address is always usable, since an unusable one reads as the
+     * default ({@see normalise}).
      *
      * @return bool The answer.
      */
     public function isActive(): bool
     {
-        return $this->all()['enabled'] && $this->apiKey() !== '' && $this->webhookSecret() !== '';
+        return $this->all()['enabled'] && $this->usable();
+    }
+
+    /**
+     * Whether the stored key and webhook secret pass the checks the settings form applies.
+     *
+     * @return bool The answer.
+     */
+    public function usable(): bool
+    {
+        return self::validKey($this->apiKey()) && self::validSecret($this->webhookSecret());
     }
 
     /**
@@ -222,7 +240,8 @@ final class Settings
      */
     public static function validKey(string $key): bool
     {
-        return (bool)preg_match('/^wgb2b_[A-Za-z0-9_-]{8,200}$/', $key);
+        // `\z`, not `$`: a `$` also matches before a trailing newline.
+        return (bool)preg_match('/^wgb2b_[A-Za-z0-9_-]{8,200}\z/', $key);
     }
 
     /**
@@ -233,7 +252,7 @@ final class Settings
      */
     public static function validSecret(string $secret): bool
     {
-        return (bool)preg_match('/^[\x21-\x7e]{16,256}$/', $secret);
+        return (bool)preg_match('/^[\x21-\x7e]{16,256}\z/', $secret);
     }
 
     /**

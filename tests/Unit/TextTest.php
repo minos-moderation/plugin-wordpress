@@ -69,6 +69,61 @@ final class TextTest extends PluginTestCase
         self::assertSame('0', $this->field($id, 'comment_approved'));
     }
 
+    public function testABlockBoundarySeparatesWordsAndAnInlineTagJoinsNone(): void
+    {
+        foreach (['blockquote', 'p', 'div', 'li', 'ul', 'ol', 'pre', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'] as $tag) {
+            foreach (["<{$tag}>Zgoda</{$tag}>zakazane", "Zgoda<{$tag} class=\"x\">zakazane"] as $html) {
+                self::assertSame(['Zgoda', 'zakazane'], preg_split('/\s+/u', Text::plain($html)), $html);
+            }
+        }
+        foreach (['Zgoda<br>zakazane', 'Zgoda<br/>zakazane', 'Zgoda<BR class="x" />zakazane'] as $html) {
+            self::assertSame("Zgoda\nzakazane", Text::plain($html), $html);
+        }
+        // Inline tags, and tags whose names only begin like a block tag's.
+        foreach (['strong', 'b', 'em', 'i', 'span', 'code', 'del', 'big', 'bdo', 'param', 'hr', 'pa'] as $tag) {
+            self::assertSame('zakazane', Text::plain("zak<{$tag}>a</{$tag}>zane"), $tag);
+        }
+        self::assertSame('zakazane', Text::plain('zak<a href="https://a.example/">a</a>zane'));
+    }
+
+    public function testTheTextOfTitleAndAltIsStillKeptInPlace(): void
+    {
+        self::assertSame(['ukryte', 'słowo', 'ok'], preg_split('/\s+/u', Text::plain('<abbr title="ukryte słowo">ok</abbr>')));
+        self::assertSame(['tekst', 'obraz', 'alt', 'dalej'],
+            preg_split('/\s+/u', Text::plain('tekst <img src="x.png" alt="obraz alt"> dalej')));
+        self::assertSame(['zakazane', 'link'],
+            preg_split('/\s+/u', Text::plain('<p title="zakazane">link</p>')), 'a block tag with a title keeps it');
+    }
+
+    public function testAQuotedWordIsSentApartFromTheNextOne(): void
+    {
+        $this->configure();
+        $this->post('<blockquote>Zgoda</blockquote>zakazane');
+
+        self::assertSame(['Zgoda', 'zakazane'], preg_split('/\s+/u', $this->sentBody()['elementy'][0]['tekst']));
+    }
+
+    public function testAMaskFitsOnlyAsTheSentTextWithCharactersTurnedIntoBlocks(): void
+    {
+        $sent = 'Żółw ma brzydkie słowo';
+        self::assertTrue(Text::maskFits($sent, 'Żółw ma ████████ słowo'));
+        self::assertTrue(Text::maskFits($sent, str_repeat('█', mb_strlen($sent, 'UTF-8'))), 'every character may be masked');
+        self::assertTrue(Text::maskFits($sent, $sent), 'masking nothing changes nothing');
+        self::assertFalse(Text::maskFits($sent, 'Żółw ma ███████ słowo'), 'one character short');
+        self::assertFalse(Text::maskFits($sent, 'Zółw ma ████████ słowo'), 'another character');
+        self::assertFalse(Text::maskFits('', ''), 'nothing was sent');
+        self::assertFalse(Text::maskFits($sent, "Żółw ma \xff███████ słowo"), 'not UTF-8');
+    }
+
+    public function testOnlyPlainContentIsPlain(): void
+    {
+        self::assertTrue(Text::isPlain('Tom &amp; Jerry &lt;3'));
+        self::assertTrue(Text::isPlain("dwa wiersze\ntekstu "));
+        self::assertFalse(Text::isPlain('no to jest <em>głupi</em> pomysł'));
+        self::assertFalse(Text::isPlain('<a href="https://a.example/">link</a>'));
+        self::assertFalse(Text::isPlain('<abbr title="ukryty">skrót</abbr>'));
+    }
+
     public function testASixtyThousandSpaceCommentKeepsItsText(): void
     {
         $this->configure(['failure_mode' => Settings::FAIL_OPEN]);

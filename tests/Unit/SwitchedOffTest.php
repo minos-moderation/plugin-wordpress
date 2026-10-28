@@ -62,6 +62,56 @@ final class SwitchedOffTest extends PluginTestCase
         }
     }
 
+    public function testSwitchingOnAgainSendsWhatWasWaitingWithAFreshTimeout(): void
+    {
+        [$accepted, $retrying] = $this->waitingThenSwitchedOff();
+        // A third comment waited too, and a moderator approved it while the plugin was off.
+        $this->configure(['failure_mode' => Settings::FAIL_OPEN]);
+        $decided = $this->post('Komentarz zatwierdzony ręcznie w czasie przerwy.');
+        $this->configure(['enabled' => false, 'failure_mode' => Settings::FAIL_OPEN]);
+        wp_set_comment_status($decided, 'approve');
+        // Long past the timeout: the old rule published them all unassessed at the first sweep.
+        $this->now += 3 * 3600;
+        $requests = count(WpStub::$requests);
+
+        update_option(Settings::OPTION, ['enabled' => true, 'failure_mode' => Settings::FAIL_OPEN] + Settings::defaults());
+
+        foreach ([$accepted, $retrying] as $id) {
+            self::assertTrue($this->pending($id));
+            self::assertSame('1', $this->field($id, Meta::REVISION), 'sent again as its next revision');
+            self::assertSame((string)$this->now, $this->field($id, Meta::HELD_AT), 'with a fresh timeout');
+        }
+        $due = array_values(array_filter(self::events(Submission::HOOK_RETRY), function (array $event): bool {
+            return $event['at'] === $this->now;
+        }));
+        self::assertSame([[$accepted], [$retrying]], array_column($due, 'args'));
+        self::assertCount($requests, WpStub::$requests, 'from WP-Cron, not in the administrator\'s request');
+        self::assertSame(Meta::UNASSESSED, $this->field($decided, Meta::STATUS), 'a person\'s decision is left alone');
+        self::assertSame('1', $this->field($decided, 'comment_approved'));
+
+        do_action(Sweeper::HOOK);
+
+        $sent = array_map(static function (array $request): string {
+            return json_decode($request['args']['body'], true)['elementy'][0]['id'];
+        }, array_slice(WpStub::$requests, $requests));
+        self::assertSame(['wp:' . $accepted . '.1', 'wp:' . $retrying . '.1'], $sent);
+        foreach ([$accepted, $retrying] as $id) {
+            self::assertTrue($this->pending($id), 'not published unassessed');
+            self::assertSame('0', $this->field($id, 'comment_approved'));
+        }
+    }
+
+    public function testSavingTheSettingsWhileSwitchedOnSendsNothingAgain(): void
+    {
+        $this->configure();
+        $id = $this->post('Komentarz czekający przy zapisie ustawień.');
+
+        update_option(Settings::OPTION, ['enabled' => true, 'timeout_min' => 30] + Settings::defaults());
+
+        self::assertNull($this->field($id, Meta::REVISION));
+        self::assertSame([], self::events(Submission::HOOK_RETRY));
+    }
+
     public function testNewCommentsAreLeftAsWordPressDecidedAndTheModeratorIsNotSilenced(): void
     {
         [$accepted] = $this->waitingThenSwitchedOff();

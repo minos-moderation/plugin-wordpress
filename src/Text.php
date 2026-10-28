@@ -23,6 +23,9 @@ final class Text
     /** The most `meta.link_domains` the contract takes. */
     public const MAX_LINK_DOMAINS = 10;
 
+    /** The character the gateway puts in place of each hidden character of a masked text. */
+    public const MASK = '█';
+
     /**
      * The whitespace {@see trim} removes, as UTF-8: the 26 characters PCRE's `[\s\p{Z}]`
      * matches with `/u` (`TextTest` holds the two equal), listed so trimming needs no regex.
@@ -43,6 +46,12 @@ final class Text
      * does not match is left to `strip_tags`.
      */
     private const TAG = '/<[a-z][^<>"\']*+(?:(?:"[^">]*+"|\'[^\'>]*+\')[^<>"\']*+)*+>/i';
+
+    /**
+     * An opening or closing block tag (or `<br>`), ended at its first `>` as kses ends it:
+     * a line break in the plain text, so words on both sides of a block boundary stay apart.
+     */
+    private const BLOCK = '#</?(?:blockquote|p|div|li|ul|ol|pre|h[1-6]|br)\b[^<>]*+>#i';
 
     /** A `title` or `alt` attribute inside a tag, quoted or not. */
     private const TEXT_ATTRIBUTE = '/[\s"\'](?:title|alt)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s"\'=<>`]+))/i';
@@ -65,11 +74,16 @@ final class Text
 
     /**
      * The comment's plain text: tags removed (with the content of `script` and `style`),
-     * the text of `title` and `alt` attributes kept in their place, entities decoded,
-     * surrounding whitespace trimmed.
+     * the text of `title` and `alt` attributes kept in their place, block tags (`p`, `div`,
+     * `blockquote`, lists, `pre`, headings, `br`) turned into line breaks, entities decoded,
+     * surrounding whitespace trimmed. Inline tags go without a trace, so `zak<b>a</b>zane`
+     * reads `zakazane`, as a reader sees it.
      *
      * Attribute text is assessed like any other text: a reader sees it (a tooltip, an
-     * image's alternative), so dropping it would let words past the assessment.
+     * image's alternative), so dropping it would let words past the assessment. A block
+     * boundary is a line break for the reader too: without it,
+     * `<blockquote>Zgoda</blockquote>zakazane` would read `Zgodazakazane` and the second
+     * word would go unassessed.
      *
      * @param string $html The stored comment content.
      * @return string The text, or '' when the content is not valid UTF-8.
@@ -83,6 +97,8 @@ final class Text
         // more text is assessed, never less — an empty text would get the failure mode.
         $text = preg_replace('@<(script|style)[^>]*?>.*?</\\1>@si', '', $html) ?? $html;
         $text = preg_replace_callback(self::TAG, [self::class, 'attributeText'], $text) ?? $text;
+        // After the attribute text, which a block tag with a `title` keeps in its place.
+        $text = preg_replace(self::BLOCK, "\n", $text) ?? $text;
         $text = html_entity_decode(strip_tags($text), ENT_QUOTES | ENT_HTML5, 'UTF-8');
         return self::trim($text);
     }
@@ -108,6 +124,60 @@ final class Text
     public static function cut(string $plain): string
     {
         return self::trim(mb_substr($plain, 0, self::MAX_CHARS, 'UTF-8'));
+    }
+
+    /**
+     * Whether a masked text may stand for the text that was sent: the same number of
+     * characters, each either the sent character or {@see MASK}. A masked text of another
+     * length or with another character would publish words the gateway never assessed as
+     * the author's, so the plugin holds such a comment instead.
+     *
+     * Plugin logic (what the plugin publishes), not a fork of the client's verification.
+     *
+     * @param string $sent   The text that was sent for assessment.
+     * @param string $masked The gateway's `ocenzurowany`.
+     * @return bool The answer; false for an empty or invalid UTF-8 text.
+     */
+    public static function maskFits(string $sent, string $masked): bool
+    {
+        $sentChars = preg_split('//u', $sent, -1, PREG_SPLIT_NO_EMPTY);
+        $maskedChars = preg_split('//u', $masked, -1, PREG_SPLIT_NO_EMPTY);
+        if (!is_array($sentChars) || !is_array($maskedChars) || $sentChars === []
+            || count($sentChars) !== count($maskedChars)) {
+            return false;
+        }
+        foreach ($maskedChars as $i => $char) {
+            if ($char !== $sentChars[$i] && $char !== self::MASK) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Whether stored content is plain text: what a reader sees is exactly its plain text,
+     * with no markup, links or attribute text. Only such a comment may be replaced by its
+     * masked text, because then the replacement changes nothing but the masked characters.
+     *
+     * @param string $html The stored comment content.
+     * @return bool The answer.
+     */
+    public static function isPlain(string $html): bool
+    {
+        return self::plain($html) === self::trim(html_entity_decode($html, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+    }
+
+    /**
+     * Whether stored content is a masked text of an original: plain text that fits the
+     * original's plain text ({@see isPlain}, {@see maskFits}).
+     *
+     * @param string $original The original content.
+     * @param string $content  The stored content.
+     * @return bool The answer.
+     */
+    public static function isMaskOf(string $original, string $content): bool
+    {
+        return self::isPlain($content) && self::maskFits(self::plain($original), self::plain($content));
     }
 
     /**

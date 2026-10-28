@@ -25,14 +25,20 @@ Licencja: GPL-2.0 lub nowsza (plik `LICENSE`).
    ustawienia i zaznacz **Moderacja włączona**.
 4. Przekaż operatorowi **adres webhooka** widoczny na stronie ustawień (patrz niżej).
 
-Do czasu włączenia moderacji i zapisania klucza oraz sekretu wtyczka nic nie robi:
-komentarze działają tak jak bez niej.
+Świeżo zainstalowana wtyczka jest wyłączona i nic nie robi: komentarze działają tak jak
+bez niej. Włączona bez poprawnego klucza API lub sekretu webhooka nie wysyła komentarzy,
+a każdy nowy komentarz od razu trafia do trybu „Gdy brak werdyktu” (przy fail-closed czeka
+na moderatora); komunikat na każdej stronie panelu mówi, czego brakuje.
 
 **Wyłączenie moderacji** (odznaczenie **Moderacja włączona**) zatrzymuje wtyczkę
 całkowicie: nie wstrzymuje ani nie wysyła nowych komentarzy, nie ponawia wysyłek, nie
 stosuje trybu „Gdy brak werdyktu”, a adres webhooka odpowiada HTTP 404, więc werdykty nie
 są przyjmowane. Komentarze, które czekały na werdykt, zostają w kolejce moderacji
-WordPressa do decyzji człowieka.
+WordPressa do decyzji człowieka. **Ponowne włączenie** wysyła te, których nikt w tym czasie
+nie rozstrzygnął, do oceny jeszcze raz (jako nową wersję, przez WP-Cron), z nowym czasem
+oczekiwania — nie trafiają hurtem do trybu „Gdy brak werdyktu”. Wyłączona wtyczka nadal
+usuwa po 30 dniach swoje dane o rozstrzygniętych komentarzach (patrz „Przechowywanie
+danych”).
 
 ## Adres webhooka
 
@@ -49,20 +55,22 @@ przy Twoim kluczu — brama nigdy nie wysyła werdyktu pod adres podany w samym 
 Jeśli używasz wtyczki bezpieczeństwa, która blokuje REST API dla niezalogowanych, dopuść
 trasę `minos/v1/webhook`. Ta trasa nie wymaga logowania: każde doręczenie jest podpisane
 sekretem webhooka, a wtyczka odrzuca (HTTP 401) wszystko, czego podpis się nie zgadza albo
-różni się od zegara serwera o więcej niż 5 minut.
+różni się od zegara serwera o więcej niż 5 minut — oraz każde doręczenie, gdy zapisany
+sekret nie spełnia warunków formularza (16–256 widocznych znaków ASCII), np. wpisany ręcznie
+do bazy.
 
 ## Ustawienia
 
 | Ustawienie | Domyślnie | Znaczenie |
 |---|---|---|
-| Moderacja włączona | wyłączona | Włącza wstrzymywanie i wysyłanie komentarzy. Działa dopiero z zapisanym kluczem i sekretem. Po wyłączeniu wtyczka nic nie robi (patrz wyżej). |
+| Moderacja włączona | wyłączona | Włącza wstrzymywanie i wysyłanie komentarzy. Bez poprawnego klucza i sekretu nowe komentarze trafiają od razu do trybu „Gdy brak werdyktu”. Po wyłączeniu wtyczka nic nie robi (patrz wyżej). |
 | Adres bramy | `https://gateway.wergiliusz.app` | Zmieniaj tylko na polecenie operatora. Wymagane `https://` (`http://` tylko dla `localhost` — do testów z atrapą bramy). |
 | Klucz API | — | `wgb2b_…`. Po zapisaniu strona pokazuje tylko jego początek; puste pole przy zapisie zostawia zapisany klucz. |
 | Sekret webhooka | — | Służy wyłącznie do sprawdzania podpisu werdyktów i nigdy nie jest wysyłany. Strona pokazuje tylko jego początek. |
 | Profil oceny | `forum_adult` | `forum_adult` — forum dla dorosłych; `forum_teen` — forum z udziałem nastolatków. Klucz musi mieć dostęp do wybranego profilu. |
 | Gdy brak werdyktu | fail-closed | Co zrobić z komentarzem bez werdyktu: **fail-open** — opublikować, **fail-closed** — zostawić do ręcznej moderacji. Patrz niżej. |
 | Czas oczekiwania na werdykt | 20 min (najmniej 20) | Po tym czasie komentarz bez werdyktu trafia do trybu „Gdy brak werdyktu”. Brama próbuje doręczyć werdykt przez 15 minut, stąd najmniej 20 minut. Werdykt, który nadejdzie później, jest stosowany do komentarza opublikowanego przy fail-open (patrz niżej). |
-| Komentarz ocenzurowany | opublikuj wersję zamaskowaną | Opublikować tekst z fragmentami zastąpionymi znakami `█` albo zostawić komentarz do ręcznej moderacji. Oryginał zostaje zachowany w danych komentarza. Komentarz dłuższy niż 3000 znaków zawsze zostaje do moderacji. |
+| Komentarz ocenzurowany | opublikuj wersję zamaskowaną | Opublikować tekst z fragmentami zastąpionymi znakami `█` albo zostawić komentarz do ręcznej moderacji. Oryginał zostaje zachowany w danych komentarza. Komentarz dłuższy niż 3000 znaków, komentarz z formatowaniem lub odnośnikami i komentarz, którego wersja zamaskowana nie pasuje do wysłanego tekstu, zawsze zostaje do moderacji (z wersją zamaskowaną w kolumnie **Minos**). |
 | Komentarz zablokowany | zostaw do ręcznej moderacji | Zostawić do moderacji albo oznaczyć jako spam. |
 | Pokazuj informację | włączona | Informacja pod formularzem komentarza (RODO), patrz niżej. |
 | Treść informacji | tekst domyślny | Zwykły tekst; puste pole oznacza tekst domyślny. |
@@ -79,9 +87,13 @@ różni się od zegara serwera o więcej niż 5 minut.
    - **bezpieczne** — publikuje komentarz;
    - **ocenzurowane** — publikuje wersję z zamaskowanymi fragmentami albo zostawia
      komentarz do moderacji (ustawienie); do moderacji trafia też wtedy, gdy brama nie
-     odesłała wersji zamaskowanej, gdy moderator zdążył zmienić treść albo gdy WordPress
-     nie zapisał wersji zamaskowanej (wtedy w kolumnie **Minos** pojawia się informacja
-     o błędzie zapisu) — oryginał nigdy nie jest publikowany zamiast wersji zamaskowanej;
+     odesłała wersji zamaskowanej, gdy wersja zamaskowana nie ma dokładnie długości
+     wysłanego tekstu albo zmienia w nim coś poza zakrytymi znakami, gdy komentarz ma
+     formatowanie lub odnośniki, gdy WordPress sam wstrzymałby komentarz, gdy moderator
+     zdążył zmienić treść albo gdy WordPress nie zapisał wersji zamaskowanej (wtedy
+     w kolumnie **Minos** pojawia się informacja o błędzie zapisu) — oryginał nigdy nie
+     jest publikowany zamiast wersji zamaskowanej, a wersję zamaskowaną komentarza
+     wstrzymanego widać w kolumnie **Minos**;
    - **zablokowane** — zostawia do moderacji albo oznacza jako spam (ustawienie);
    - **nieocenione** — tryb „Gdy brak werdyktu”.
 4. Werdykt i kategorie (np. `wulgaryzmy`, `spam`) widać w kolumnie **Minos** na liście
@@ -104,7 +116,11 @@ Zasady, które obowiązują zawsze:
 - **Spóźniony werdykt.** Jeśli przy fail-open komentarz został opublikowany bez werdyktu
   (minął czas oczekiwania), a werdykt nadejdzie później, wtyczka go stosuje: „zablokowane”
   przenosi komentarz do moderacji, „ocenzurowane” działa zgodnie z ustawieniem. Nie robi
-  tego, jeśli w międzyczasie ktoś zmienił status komentarza albo go edytował.
+  tego, jeśli w międzyczasie ktoś zmienił status komentarza; edycję opisuje rozdział
+  „Edycja komentarza”.
+- **Werdykt dotyczy tylko wysłanego tekstu.** Przed zastosowaniem każdego werdyktu wtyczka
+  sprawdza, czy komentarz nadal ma tekst, który wysłała do oceny. Jeśli nie, werdykt nie
+  jest stosowany, a komentarz zostaje wstrzymany i wysłany ponownie.
 - **Nie są wysyłane:** komentarze użytkowników, którzy mogą moderować komentarze
   (administratorzy, redaktorzy), komentarze oznaczone już przez WordPressa lub inną
   wtyczkę jako spam albo przeniesione do kosza, a także pingbacki, trackbacki i inne typy
@@ -113,8 +129,26 @@ Zasady, które obowiązują zawsze:
   moderację” o komentarzu, który czeka tylko na werdykt. Wiadomość przychodzi dopiero
   wtedy, gdy po werdykcie komentarz zostaje w moderacji; autor wpisu dostaje jedno
   powiadomienie o opublikowanym komentarzu, tak jak bez wtyczki.
-- **Zamaskowany tekst** jest publikowany jako zwykły tekst — bez formatowania
-  i odnośników z oryginału.
+- **Zamaskowany tekst** jest publikowany jako zwykły tekst i tylko w miejsce komentarza,
+  który sam jest zwykłym tekstem: wersja zamaskowana musi mieć dokładnie tyle znaków, ile
+  wysłany tekst, i różnić się od niego wyłącznie znakami `█`. Komentarz z formatowaniem
+  (pogrubienie, cytat, odnośnik) trafia do moderatora, a zamaskowany tekst widać
+  w kolumnie **Minos**.
+
+## Edycja komentarza
+
+- **Komentarz czekający na werdykt** (albo taki, któremu werdykt nie nadszedł w czasie
+  oczekiwania — wstrzymany przy fail-closed albo opublikowany przy fail-open), którego
+  tekst ktoś zmieni, jest wysyłany do oceny ponownie jako nowa wersja (`wp:<numer>.1`,
+  `wp:<numer>.2`…), z nowym czasem oczekiwania. Komentarz opublikowany przy fail-open
+  wraca na czas tej oceny do moderacji. Werdykt dla wcześniejszej wersji nie zmienia już
+  niczego.
+- Tak samo działa edycja przez moderatora: dopóki komentarz nie został oceniony, wtyczka
+  ocenia jego aktualny tekst, bo w WordPressie komentarze edytują tylko moderatorzy
+  i autorzy wpisów, a werdykt dotyczy wyłącznie tekstu, który brama widziała.
+- **Komentarz już oceniony** (bezpieczny, ocenzurowany, zablokowany) po edycji nie jest
+  wysyłany ponownie: zmiana treści po werdykcie jest decyzją osoby, która ją wprowadziła.
+- Zmiana samych danych autora (bez zmiany tekstu) niczego nie wysyła.
 
 ## Fail-open i fail-closed
 
@@ -127,7 +161,16 @@ klucz). Wtedy:
 
 Gdy brama jest chwilowo przeciążona lub niedostępna (HTTP 429 lub 503, brak odpowiedzi),
 komentarz czeka, a wtyczka ponawia wysyłkę po czasie wskazanym przez bramę albo po rosnącej
-przerwie (1, 2, 4… minuty), aż do upływu czasu oczekiwania.
+przerwie (1, 2, 4… minuty), aż do upływu czasu oczekiwania. Jeśli brama zapowiada, że nie
+przyjmie komentarza aż do chwili po upływie czasu oczekiwania (np. przy wyczerpanym
+dziennym limicie zapytań klucza), komentarz od razu trafia do trybu „Gdy brak werdyktu” —
+bez 20 minut czekania.
+
+**Komunikat o limicie i przeciążeniu.** Gdy brama odmówi z powodu wyczerpanego dziennego
+limitu zapytań klucza albo przeciążenia, na każdej stronie panelu (także na liście
+komentarzy i w **Ustawienia → Minos**) pojawia się komunikat, do której godziny brama nie
+przyjmuje komentarzy i co się z nimi do tego czasu dzieje. Komunikat znika o tej godzinie
+albo po pierwszym przyjętym komentarzu; nie zawiera klucza ani treści odpowiedzi bramy.
 
 Ponowienia, limit czasu i powiadomienia e-mail działają przez WP-Cron (co 5 minut). Na
 stronach o bardzo małym ruchu albo z wyłączonym WP-Cron (`DISABLE_WP_CRON`) ustaw
@@ -137,9 +180,11 @@ systemowe zadanie cron wywołujące `wp-cron.php` — inaczej mogą się opóźn
 
 Wysyłane są wyłącznie:
 
-- identyfikator komentarza w postaci `wp:<numer>` (sam numer, bez treści);
+- identyfikator komentarza w postaci `wp:<numer>` (sam numer, bez treści), a dla tekstu
+  zmienionego przed oceną `wp:<numer>.<wersja>`;
 - tekst komentarza bez znaczników HTML, razem z tekstem atrybutów `title` i `alt`
-  (czytelnik też go widzi) — **pierwsze 3000 znaków**: dłuższy komentarz jest oceniany na
+  (czytelnik też go widzi), z granicami akapitów, cytatów, list i nagłówków jako nowymi
+  wierszami (tak jak widzi je czytelnik) — **pierwsze 3000 znaków**: dłuższy komentarz jest oceniany na
   podstawie pierwszych 3000 znaków, a dalsza część nie jest oceniana (patrz „Jak to
   działa”);
 - wybrany profil oceny;
@@ -159,13 +204,34 @@ początek.
 
 Pod formularzem komentarza wtyczka pokazuje informację (domyślnie):
 
-> Komentarze są automatycznie sprawdzane przez usługę Minos. Aby ocenić komentarz,
-> przesyłamy do niej wyłącznie jego treść — bez imienia, adresu e-mail i adresu IP. Treść
-> nie jest tam przechowywana po zakończeniu oceny.
+> Komentarze są automatycznie sprawdzane przez usługę Minos. Do oceny przesyłamy tekst
+> komentarza (najwyżej 3000 znaków), liczbę linków i ich domeny oraz informację, czy to
+> pierwszy komentarz autora — nigdy imienia, adresu e-mail ani adresu IP. Tekst czeka na
+> ocenę w kolejce usługi najwyżej 30 minut, a gdy ocena się nie powiedzie, jego fragment
+> może pozostać w zaszyfrowanym dzienniku błędów do 72 godzin. Szczegóły w polityce
+> prywatności tej strony.
 
 Tekst można zmienić albo wyłączyć w ustawieniach. Nie jest pokazywany osobom, których
 komentarze nie są wysyłane (moderatorom). Uzupełnij też politykę prywatności strony
 o informację o automatycznej ocenie komentarzy.
+
+**Jeśli wpisałeś własny tekst informacji, przejrzyj go.** Wtyczka go nie zmienia.
+Wcześniejszy tekst domyślny mówił, że do usługi trafia wyłącznie treść komentarza i że
+treść nie jest przechowywana po ocenie — to nieprawda: wysyłane są też liczba linków,
+ich domeny i informacja o pierwszym komentarzu, tekst czeka w kolejce do 30 minut, a jego
+fragment może pozostać w dzienniku błędów do 72 godzin. Tekst domyślny czeka jeszcze na
+ostateczne brzmienie uzgodnione z polityką prywatności usługi Minos.
+
+## Przechowywanie danych
+
+Przy komentarzu (w danych `_minos_*`) wtyczka przechowuje: stan oceny, werdykt i kategorie,
+sygnał wsparcia, oryginał komentarza opublikowanego w wersji zamaskowanej, wersję
+zamaskowaną komentarza wstrzymanego do moderacji oraz dane techniczne (czasy, skrót
+wysłanego tekstu). **30 dni po rozstrzygnięciu** komentarza (werdykt albo tryb „Gdy brak
+werdyktu”) wtyczka usuwa wszystkie te dane — także oryginał — co godzinę, przez WP-Cron,
+również gdy moderacja jest wyłączona. Sam komentarz zostaje bez zmian: wersja zamaskowana
+pozostaje opublikowana, a kolumna **Minos** pokazuje odtąd „—”. Dane komentarzy, które
+wciąż czekają na werdykt, nie są usuwane.
 
 ## Sygnał wsparcia
 
@@ -182,6 +248,14 @@ Strona **Ustawienia → Minos** pokazuje ostatnie błędy: czas, kod HTTP, kod b
 i numer komentarza — nigdy treść. Gdy brama odrzuca komentarze z powodu konfiguracji
 (np. `brak_klucza`, `brak_webhooka`, `profil_niedozwolony`), w panelu pojawia się
 komunikat z podpowiedzią; znika po pierwszym przyjętym komentarzu.
+
+Jeśli przy jednym komentarzu zawiedzie inna wtyczka (jej kod zgłosi błąd w trakcie
+publikacji, wysyłki albo powiadomienia), Minos zapisuje w dzienniku tylko krok i numer
+komentarza — bez treści błędu, która mogłaby zawierać tekst komentarza — i obsługuje
+pozostałe komentarze dalej. Ten komentarz czeka: krok zostaje powtórzony w następnym
+przebiegu WP-Cron albo przy ponownym doręczeniu werdyktu przez bramę. Przy fail-open
+komentarz, który WordPress zdążył opublikować, zostaje opublikowany; dokończenie zapisu
+następuje w kolejnym przebiegu.
 
 ## Wyłączenie i usunięcie
 

@@ -18,8 +18,22 @@ final class Meta
     /** Where the comment stands: {@see PENDING} or the verdict (`bezpieczne`…`nieocenione`). */
     public const STATUS = '_minos_status';
 
-    /** When the plugin held the comment for assessment (unix seconds). */
+    /**
+     * `1` while the comment waits for its verdict ({@see STATUS} is {@see PENDING}), and gone
+     * once it is settled: the sweep finds waiting comments by this key alone, never by a
+     * meta value, so its query does not grow with every comment ever assessed.
+     */
+    public const WAITING = '_minos_waiting';
+
+    /** When the plugin held the comment for assessment, or for its current revision (unix seconds). */
     public const HELD_AT = '_minos_held_at';
+
+    /**
+     * Which text of the comment the gateway assesses: absent or 0 for the first, `n` for the
+     * text after the n-th edit that needed a new assessment. The item id is `wp:<id>` for
+     * revision 0 and `wp:<id>.<n>` after it; a verdict for any other revision changes nothing.
+     */
+    public const REVISION = '_minos_revision';
 
     /** When the gateway accepted it with `202` (unix seconds). */
     public const SUBMITTED_AT = '_minos_submitted_at';
@@ -36,6 +50,12 @@ final class Meta
     /** The original content of a comment the plugin published in its masked form. */
     public const ORIGINAL = '_minos_original';
 
+    /**
+     * The gateway's masked text (`ocenzurowany`) of a comment the plugin held instead of
+     * publishing it masked, shown to the moderator in the "Minos" column.
+     */
+    public const MASKED = '_minos_masked';
+
     /** `1` when the gateway flagged the comment for support (`wsparcie`). */
     public const SUPPORT = '_minos_wsparcie';
 
@@ -48,7 +68,10 @@ final class Meta
     /** How many characters of the plain text were sent for assessment. */
     public const SENT_CHARS = '_minos_sent_chars';
 
-    /** SHA-256 of the text that was sent, to notice an edit before a masked text lands. */
+    /**
+     * SHA-256 of the text that was sent: a verdict applies only while the comment still
+     * reads as that text. Absent while the current revision has not been sent yet.
+     */
     public const SENT_HASH = '_minos_sent_hash';
 
     /**
@@ -59,16 +82,31 @@ final class Meta
 
     /**
      * `1` while a comment stands published by the plugin's own fail-open decision, so a
-     * verdict that arrives later may still be applied to it. Any status change or edit
-     * after that publication removes it: a person's decision stands.
+     * verdict that arrives later may still be applied to it; also while the plugin's own
+     * approval on a verdict is unfinished (another plugin's hook threw after WordPress
+     * approved it). A person's status change after that publication removes it: a person's
+     * decision stands. An edit sends the comment again, held.
      */
     public const AUTO_PUBLISHED = '_minos_auto_published';
 
+    /**
+     * When the comment was settled (unix seconds): its verdict, or the failure mode. Thirty
+     * days later every `_minos_*` key of the comment goes ({@see Retention}).
+     */
+    public const DECIDED_AT = '_minos_decided_at';
+
+    /**
+     * `1` when the failure mode applied because no verdict could arrive in time (the receive
+     * timeout passed): such a comment was never assessed, so an edit sends it again.
+     */
+    public const TIMED_OUT = '_minos_timed_out';
+
     /** Every key above: what `uninstall.php` deletes. */
     public const ALL = [
-        self::STATUS, self::HELD_AT, self::SUBMITTED_AT, self::WP_APPROVED, self::RETRY_AT,
-        self::ATTEMPTS, self::ORIGINAL, self::SUPPORT, self::CATEGORIES, self::ERROR,
-        self::SENT_CHARS, self::SENT_HASH, self::CUT, self::AUTO_PUBLISHED,
+        self::STATUS, self::WAITING, self::HELD_AT, self::REVISION, self::SUBMITTED_AT, self::WP_APPROVED, self::RETRY_AT,
+        self::ATTEMPTS, self::ORIGINAL, self::MASKED, self::SUPPORT, self::CATEGORIES, self::ERROR,
+        self::SENT_CHARS, self::SENT_HASH, self::CUT, self::AUTO_PUBLISHED, self::TIMED_OUT,
+        self::DECIDED_AT,
     ];
 
     /** {@see STATUS} of a comment waiting for its verdict (a wire-style value, Polish). */
@@ -82,4 +120,10 @@ final class Meta
      * (WordPress refused the update, or stored something else): the comment stays held.
      */
     public const ERROR_MASKED_WRITE = 'zapis_zamaskowanej_nieudany';
+
+    /**
+     * {@see ERROR} when the plugin was switched on without a usable key or webhook secret,
+     * so it sent nothing and the failure mode applied.
+     */
+    public const ERROR_NOT_CONFIGURED = 'brak_konfiguracji';
 }

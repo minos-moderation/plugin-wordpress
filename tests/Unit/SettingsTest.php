@@ -42,6 +42,39 @@ final class SettingsTest extends PluginTestCase
         self::assertFalse($this->plugin->settings->isActive());
     }
 
+    public function testTheDefaultNoticeNamesWhatIsSentAndClaimsNothingAboutTheTextNeverBeingKept(): void
+    {
+        $notice = Settings::defaultNotice();
+
+        // Every kind of data the request carries (Submission::item): the text, the link
+        // count, the link domains and the first-comment signal.
+        foreach ([
+            'the text'          => '/\btekst\w*\s+komentarz/u',
+            'the links'         => '/\blink\w*/u',
+            'the domains'       => '/\bdomen\w*/u',
+            'the first comment' => '/\bpierwsz\w*\s+komentarz/u',
+        ] as $what => $pattern) {
+            self::assertMatchesRegularExpression($pattern, $notice, "the notice must name {$what}");
+        }
+        // What the service may hold, as the privacy policy states it.
+        self::assertMatchesRegularExpression('/\b30\s+minut/u', $notice);
+        self::assertMatchesRegularExpression('/\b72\s+godzin/u', $notice);
+
+        // No claim that the text is never kept, and none that only the text is sent. Each
+        // pattern must catch a sentence that makes such a claim, or it guards nothing.
+        $falseClaims = [
+            'Treść nie jest przechowywana po zakończeniu oceny.',
+            'Usługa nie przechowuje treści komentarzy.',
+            'Treść komentarza nigdy nie jest zapisywana.',
+            'Przesyłamy do niej wyłącznie jego treść.',
+        ];
+        foreach (['/\bnie\s+(jest\s+)?(\w+\s+)?przechowywan/u', '/\bnie\s+przechowuj/u',
+            '/\bnigdy\s+nie\s+(jest\s+)?(przechowywan|zapisywan)/u', '/\bwyłącznie\s+(jego\s+)?treść/u'] as $claim) {
+            self::assertNotEmpty(preg_grep($claim, $falseClaims), "{$claim} catches no false claim: it is broken");
+            self::assertDoesNotMatchRegularExpression($claim, $notice);
+        }
+    }
+
     public function testTheTimeoutIsNeverShorterThanTheGatewaysDeliveryWindowWithGrace(): void
     {
         foreach (['5', 19, '20', 45] as $minutes) {
@@ -132,6 +165,16 @@ final class SettingsTest extends PluginTestCase
         self::assertCount(2, WpStub::$settingsErrors);
     }
 
+    public function testAKeyOrASecretWithATrailingNewlineIsNotValid(): void
+    {
+        self::assertTrue(Settings::validKey(self::KEY));
+        self::assertTrue(Settings::validSecret(self::SECRET));
+        foreach (["\n", "\r\n", "\0"] as $tail) {
+            self::assertFalse(Settings::validKey(self::KEY . $tail), json_encode($tail));
+            self::assertFalse(Settings::validSecret(self::SECRET . $tail), json_encode($tail));
+        }
+    }
+
     public function testTheSecretsAreSavedThroughTheirSanitisers(): void
     {
         $this->configure();
@@ -195,14 +238,23 @@ final class SettingsTest extends PluginTestCase
         self::assertStringNotContainsString(self::KEY, $html);
     }
 
-    public function testASwitchedOnPluginWithoutASecretSaysSo(): void
+    public function testASwitchedOnPluginWithoutAUsableSecretSaysWhyOnEveryAdminScreen(): void
     {
         $this->configure();
-        WpStub::$options[Settings::SECRET_OPTION] = '';
+        WpStub::$options[Settings::SECRET_OPTION] = 'za-krotki';
         WpStub::$currentUser = 1;
         WpStub::$userCaps[1] = ['manage_options'];
+        self::assertFalse($this->plugin->settings->isActive());
 
-        self::assertStringContainsString('brakuje klucza API lub sekretu', $this->notices());
+        foreach ([null, 'edit-comments', 'dashboard'] as $screen) {
+            WpStub::$screen = $screen === null ? null : (object)['id' => $screen];
+            self::assertStringContainsString(esc_html(CommentsScreen::notConfiguredMessage()), $this->notices(), (string)$screen);
+        }
+        $this->page->registerSettings();
+        ob_start();
+        $this->page->render();
+        self::assertStringContainsString(esc_html(CommentsScreen::notConfiguredMessage()), (string)ob_get_clean());
+        self::assertStringNotContainsString('za-krotki', $this->notices());
     }
 
     public function testTheCommentsScreenShowsTheVerdictAndTheSupportCue(): void

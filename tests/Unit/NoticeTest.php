@@ -19,8 +19,7 @@ final class NoticeTest extends PluginTestCase
         $html = $this->form();
 
         self::assertStringContainsString('class="minos-moderation-notice"', $html);
-        self::assertStringContainsString('Minos', $html);
-        self::assertStringContainsString('bez imienia, adresu e-mail i adresu IP', $html);
+        self::assertStringContainsString(esc_html(Settings::defaultNotice()), $html);
     }
 
     public function testTheAdministratorsTextIsShownAsText(): void

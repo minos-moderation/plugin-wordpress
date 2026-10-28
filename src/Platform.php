@@ -227,7 +227,8 @@ class Platform
     }
 
     /**
-     * Comments waiting for their verdict, oldest first.
+     * Comments waiting for their verdict, oldest first: by the meta key alone
+     * ({@see Meta::WAITING}), which WordPress indexes, never by a meta value.
      *
      * @param int $limit The most to return.
      * @return array<int,int> Comment ids.
@@ -235,11 +236,73 @@ class Platform
     public function pendingCommentIds(int $limit): array
     {
         $ids = get_comments([
+            'status'   => 'any',
+            'meta_key' => Meta::WAITING,
+            'fields'   => 'ids',
+            'number'   => $limit,
+            'orderby'  => 'comment_ID',
+            'order'    => 'ASC',
+        ]);
+        return array_map('intval', is_array($ids) ? $ids : []);
+    }
+
+    /**
+     * Comments settled before a moment ({@see Meta::DECIDED_AT}), oldest first: a query by
+     * value, run hourly by {@see Retention} over the comments settled in the last 30 days and
+     * those it has not cleaned yet.
+     *
+     * @param int $before Unix seconds.
+     * @param int $limit  The most to return.
+     * @return array<int,int> Comment ids.
+     */
+    public function commentIdsDecidedBefore(int $before, int $limit): array
+    {
+        $ids = get_comments([
+            'status'       => 'any',
+            'meta_key'     => Meta::DECIDED_AT,
+            'meta_value'   => $before,
+            'meta_compare' => '<',
+            'meta_type'    => 'NUMERIC',
+            'fields'       => 'ids',
+            'number'       => $limit,
+            'orderby'      => 'comment_ID',
+            'order'        => 'ASC',
+        ]);
+        return array_map('intval', is_array($ids) ? $ids : []);
+    }
+
+    /**
+     * Every comment with a meta key, whatever its value: for a one-off upgrade only.
+     *
+     * @param string $key The meta key.
+     * @return array<int,int> Comment ids.
+     */
+    public function commentIdsWithMetaKey(string $key): array
+    {
+        $ids = get_comments([
+            'status'   => 'any',
+            'meta_key' => $key,
+            'fields'   => 'ids',
+            'orderby'  => 'comment_ID',
+            'order'    => 'ASC',
+        ]);
+        return array_map('intval', is_array($ids) ? $ids : []);
+    }
+
+    /**
+     * Every comment with a meta value: a query by value, for a one-off upgrade only.
+     *
+     * @param string $key   The meta key.
+     * @param string $value The value.
+     * @return array<int,int> Comment ids.
+     */
+    public function commentIdsWithMeta(string $key, string $value): array
+    {
+        $ids = get_comments([
             'status'     => 'any',
-            'meta_key'   => Meta::STATUS,
-            'meta_value' => Meta::PENDING,
+            'meta_key'   => $key,
+            'meta_value' => $value,
             'fields'     => 'ids',
-            'number'     => $limit,
             'orderby'    => 'comment_ID',
             'order'      => 'ASC',
         ]);

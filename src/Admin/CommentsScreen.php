@@ -8,6 +8,7 @@ use Minos\WordPress\Log;
 use Minos\WordPress\Meta;
 use Minos\WordPress\Platform;
 use Minos\WordPress\Settings;
+use Minos\WordPress\Text;
 
 defined('ABSPATH') || exit;
 
@@ -101,16 +102,30 @@ final class CommentsScreen
             echo '<br /><small>' . esc_html__('wpis dłuższy niż 3000 znaków — oceniono początek', 'minos-moderation') . '</small>';
         }
         $error = $this->wp->meta($id, Meta::ERROR);
-        if ($error === Meta::ERROR_MASKED_WRITE) {
+        $step = Log::failedStep($error);
+        if ($error === Meta::ERROR_NOT_CONFIGURED) {
+            echo '<br /><small>' . esc_html__('wtyczka nie miała poprawnego klucza API lub sekretu webhooka — nie wysłano do oceny', 'minos-moderation') . '</small>';
+        } elseif ($error === Meta::ERROR_MASKED_WRITE) {
             echo '<br /><small>' . esc_html__('nie udało się zapisać wersji zamaskowanej — komentarz czeka na ręczną moderację', 'minos-moderation') . '</small>';
+        } elseif ($step !== null) {
+            echo '<br /><small>' . esc_html(sprintf(__('błąd przy kroku „%s” (zgłosiła go wtyczka lub inna wtyczka; szczegóły nie są zapisywane)', 'minos-moderation'), self::stepLabel($step))) . '</small>';
         } elseif ($error !== '') {
             echo '<br /><small>' . esc_html(sprintf(__('błąd: %s', 'minos-moderation'), $error)) . '</small>';
         }
         if ($this->wp->meta($id, Meta::AUTO_PUBLISHED) === '1') {
             echo '<br /><small>' . esc_html__('opublikowano bez werdyktu (fail-open); spóźniony werdykt zostanie zastosowany', 'minos-moderation') . '</small>';
         }
-        if ($this->wp->meta($id, Meta::ORIGINAL) !== '') {
+        $original = $this->wp->meta($id, Meta::ORIGINAL);
+        $comment = $this->wp->comment($id);
+        // Only while the content is that original's mask: an edit since replaced the mask.
+        if ($original !== '' && $comment !== null && Text::isMaskOf($original, (string)$comment->comment_content)) {
             echo '<br /><small>' . esc_html__('treść zastąpiona wersją zamaskowaną; oryginał zachowano', 'minos-moderation') . '</small>';
+        }
+        $masked = $this->wp->meta($id, Meta::MASKED);
+        if ($masked !== '') {
+            // Plain text from the gateway, shown as text.
+            echo '<details><summary><small>' . esc_html__('wersja zamaskowana od bramy (nieopublikowana)', 'minos-moderation')
+                . '</small></summary><small class="minos-moderation-masked">' . esc_html($masked) . '</small></details>';
         }
         if ($this->wp->meta($id, Meta::SUPPORT) === '1') {
             echo '<p><strong>' . esc_html__('Sygnał wsparcia:', 'minos-moderation') . '</strong> '
@@ -119,7 +134,8 @@ final class CommentsScreen
     }
 
     /**
-     * `admin_notices` action: a configuration error, a switched-on plugin that cannot work,
+     * `admin_notices` action, on every admin screen: a configuration error, the gateway
+     * refusing the key's comments until a moment, a switched-on plugin that cannot work;
      * and recent support cues on the comments screen.
      *
      * @return void
@@ -133,8 +149,12 @@ final class CommentsScreen
                     . ' ' . self::errorAdvice($error['http'] ?? null, $error['code'] ?? null)
                     . ' ' . __('Do czasu poprawki komentarze trafiają do trybu „gdy brak werdyktu”.', 'minos-moderation'));
             }
+            $pause = $this->log->pausedUntil();
+            if ($pause !== null) {
+                self::notice('warning', self::pauseMessage($pause));
+            }
             if ($this->settings->all()['enabled'] && !$this->settings->isActive()) {
-                self::notice('warning', __('Minos: moderacja jest włączona, ale brakuje klucza API lub sekretu webhooka, więc komentarze nie są wysyłane do oceny.', 'minos-moderation'));
+                self::notice('error', self::notConfiguredMessage());
             }
         }
         $screen = function_exists('get_current_screen') ? get_current_screen() : null;
@@ -173,6 +193,51 @@ final class CommentsScreen
             'zablokowane'      => __('Zablokowany', 'minos-moderation'),
             Meta::UNASSESSED   => __('Nieoceniony', 'minos-moderation'),
         ];
+    }
+
+    /**
+     * What the administrator is told while the gateway refuses the key's comments: until
+     * when, and what happens to new comments meanwhile. Never the key or anything from the
+     * gateway's answer but its kind.
+     *
+     * @param array{kind:string,until:int,left_s:int} $pause What `Log::pausedUntil` read.
+     * @return string Polish text.
+     */
+    public static function pauseMessage(array $pause): string
+    {
+        // The site's time zone; the date too when the pause outlasts a day.
+        $at = wp_date($pause['left_s'] < 86400 ? 'H:i' : 'Y-m-d H:i', $pause['until']);
+        if ($pause['kind'] === Log::PAUSE_DAILY_LIMIT) {
+            return sprintf(__('Minos: dzienny limit zapytań klucza jest wyczerpany do %s. Do tego czasu nowe komentarze trafiają do trybu „gdy brak werdyktu” (fail-closed: czekają na moderatora; fail-open: są publikowane bez oceny).', 'minos-moderation'), $at);
+        }
+        return sprintf(__('Minos: brama jest przeciążona i nie przyjmuje komentarzy do %s. Komentarze czekają na ponowną wysyłkę; te, których czas oczekiwania minie wcześniej, trafiają do trybu „gdy brak werdyktu” (fail-closed: czekają na moderatora; fail-open: są publikowane bez oceny).', 'minos-moderation'), $at);
+    }
+
+    /**
+     * Why a switched-on plugin sends nothing, and what happens to new comments meanwhile.
+     *
+     * @return string Polish text.
+     */
+    public static function notConfiguredMessage(): string
+    {
+        return __('Minos: moderacja jest włączona, ale brakuje poprawnego klucza API lub sekretu webhooka. Komentarze nie są wysyłane do oceny, a każdy nowy komentarz trafia od razu do trybu „gdy brak werdyktu” (fail-closed: czeka na moderatora; fail-open: jest publikowany bez oceny). Uzupełnij klucz i sekret w Ustawienia → Minos.', 'minos-moderation');
+    }
+
+    /**
+     * A failed step's name, for the column.
+     *
+     * @param string $step One of the `Log::STEP_*` names.
+     * @return string Polish text.
+     */
+    public static function stepLabel(string $step): string
+    {
+        $labels = [
+            Log::STEP_TIMEOUT => __('koniec czasu oczekiwania', 'minos-moderation'),
+            Log::STEP_SUBMIT  => __('wysyłka do oceny', 'minos-moderation'),
+            Log::STEP_NOTIFY  => __('powiadomienie moderatora', 'minos-moderation'),
+            Log::STEP_VERDICT => __('zastosowanie werdyktu', 'minos-moderation'),
+        ];
+        return $labels[$step] ?? $step;
     }
 
     /**

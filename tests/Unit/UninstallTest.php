@@ -27,6 +27,8 @@ final class UninstallTest extends PluginTestCase
         $refused = $this->post('Komentarz odrzucony.');
         WpStub::answer(429, ['blad' => ['kod' => 'kolejka_pelna', 'ponow_za_s' => 60]]);
         $retrying = $this->post('Komentarz czekający na ponowienie.');
+        self::assertNotNull($this->plugin->log->sendingPause(), 'the scenario stores the pause');
+        $this->now += 60;
         $censored = $this->post('brzydki komentarz');
         $this->deliver(self::verdict($censored, 'ocenzurowane', ['ocenzurowany' => '███████ komentarz',
             'kategorie' => ['wulgaryzmy'], 'wsparcie' => true]));

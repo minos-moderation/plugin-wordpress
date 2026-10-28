@@ -94,47 +94,41 @@ final class SweeperTest extends PluginTestCase
     public function testADueRetryIsSentAndOneNotDueIsNot(): void
     {
         $this->configure();
-        WpStub::answer(429, ['blad' => ['kod' => 'limit_minutowy_klucza', 'ponow_za_s' => 30]]);
-        $due = $this->post('Ponowienie za 30 s.');
-        WpStub::answer(429, ['blad' => ['kod' => 'limit_minutowy_klucza', 'ponow_za_s' => 600]]);
-        $later = $this->post('Ponowienie za 10 min.');
+        // A 202 that took neither: each is retried after its own backoff, with no pause.
+        WpStub::answer(202, ['przyjete' => []]);
+        $due = $this->post('Ponowienie za minutę.');
+        $this->now += 30;
+        WpStub::answer(202, ['przyjete' => []]);
+        $later = $this->post('Ponowienie za półtorej minuty.');
 
         $this->now += 30;
         do_action(Sweeper::HOOK);
 
         self::assertCount(3, WpStub::$requests);
-        self::assertSame('wp:' . $due, $this->sentBody()['elementy'][0]['id']);
+        self::assertSame(['wp:' . $due], array_column($this->sentBody()['elementy'], 'id'));
         self::assertSame((string)$this->now, $this->field($due, Meta::SUBMITTED_AT));
         self::assertNull($this->field($later, Meta::SUBMITTED_AT));
     }
 
-    public function testASweepStopsSendingAtTheFirstAnswerThatAsksToWait(): void
+    public function testASweepSendsAtMostItsRequestsAndLeavesTheRestDue(): void
     {
         $this->configure();
+        WpStub::networkFailure();
         $ids = [];
-        for ($i = 0; $i < 3; $i++) {
-            WpStub::networkFailure();
-            $ids[] = $this->post('Komentarz w czasie awarii numer ' . $i . '.');
-        }
-        $this->now += 60;
-        WpStub::answer(503);
-        do_action(Sweeper::HOOK);
-
-        self::assertCount(4, WpStub::$requests, 'one attempt, then the sweep waits');
-    }
-
-    public function testASweepSendsAtMostTenComments(): void
-    {
-        $this->configure();
-        for ($i = 0; $i < Sweeper::MAX_SUBMISSIONS + 3; $i++) {
-            WpStub::networkFailure();
-            $this->post('Komentarz w kolejce ponowień numer ' . $i . '.');
+        for ($i = 0; $i < Sweeper::MAX_REQUESTS * Submission::MAX_ITEMS + 5; $i++) {
+            $ids[] = $this->post('Komentarz w kolejce ponowień numer ' . $i . '.');
         }
         $before = count(WpStub::$requests);
-        $this->now += 60;
+        $this->now += Submission::FIRST_BACKOFF_S;
         do_action(Sweeper::HOOK);
 
-        self::assertSame(Sweeper::MAX_SUBMISSIONS, count(WpStub::$requests) - $before);
+        self::assertSame(Sweeper::MAX_REQUESTS, count(WpStub::$requests) - $before);
+        foreach (array_slice($ids, -5) as $id) {
+            self::assertNull($this->field($id, Meta::SUBMITTED_AT));
+            self::assertTrue($this->plugin->submission->due($id), 'left due');
+        }
+        do_action(Sweeper::HOOK);
+        self::assertSame(Sweeper::MAX_REQUESTS + 1, count(WpStub::$requests) - $before, 'the next run sends them');
     }
 
     public function testTheSweepFindsWaitingCommentsByTheirKeyAloneAndNeverTheSettledOnes(): void

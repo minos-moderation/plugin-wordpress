@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace Minos\WordPress\Tests\EndToEnd;
 
+use Minos\WordPress\Log;
 use Minos\WordPress\Meta;
 use Minos\WordPress\Platform;
 use Minos\WordPress\Plugin;
 use Minos\WordPress\Settings;
+use Minos\WordPress\Submission;
 use PHPUnit\Framework\TestCase;
 use WpStub;
 
@@ -63,24 +65,7 @@ final class EndToEndTest extends TestCase
 
     public function testCommentsGoToTheMockAndTheSignedVerdictsAreApplied(): void
     {
-        $mock = self::mockDirectory();
-        $state = $this->dir . '/state.json';
-        $sitePort = $this->serve(__DIR__ . '/fixtures', 'site.php', ['MINOS_SITE_STATE' => $state]);
-        $env = [
-            'MINOS_MOCK_WEBHOOK_URL'    => "http://127.0.0.1:{$sitePort}/wp-json/minos/v1/webhook",
-            'MINOS_MOCK_WEBHOOK_SECRET' => self::SECRET,
-            'MINOS_MOCK_KEY'            => self::KEY,
-            'MINOS_MOCK_DATA_DIR'       => $this->dir . '/mock',
-            'MINOS_MOCK_DELAY_S'        => '0',
-        ];
-        $mockPort = $this->serve($mock . '/public', null, $env);
-
-        WpStub::$options[Settings::OPTION] = ['enabled' => true, 'gateway_url' => "http://127.0.0.1:{$mockPort}",
-            'failure_mode' => Settings::FAIL_CLOSED, 'blocked_mode' => Settings::HOLD] + Settings::defaults();
-        WpStub::$options[Settings::KEY_OPTION] = self::KEY;
-        WpStub::$options[Settings::SECRET_OPTION] = self::SECRET;
-        WpStub::$network = true;
-        (new Plugin(new Platform()))->hook(__DIR__ . '/../../minos-moderation.php');
+        [$mock, $state, $env] = $this->start([]);
 
         $ids = [
             'safe'      => WpStub::postComment(['comment_content' => 'Uprzejmy komentarz testowy.']),
@@ -129,6 +114,100 @@ final class EndToEndTest extends TestCase
         self::assertSame(['200' => 7, '401' => 2], $answers);
     }
 
+    public function testCommentsHeldDuringThePauseOfAFullQueueGoToTheMockInOneRequest(): void
+    {
+        // The mock's queue takes two comments; the third is refused with `kolejka_pelna`.
+        $offset = 0;
+        [$mock, $state, $env] = $this->start(['MINOS_MOCK_QUEUE_MAX' => '2'], static function () use (&$offset): int {
+            return time() + $offset;
+        });
+        $ids = [];
+        foreach (['Pierwszy', 'Drugi', 'Trzeci', 'Czwarty'] as $word) {
+            $ids[] = WpStub::postComment(['comment_content' => $word . ' komentarz testowy w kolejce.']);
+        }
+
+        self::assertCount(3, WpStub::$requests, 'the fourth waited for the pause the third was refused with');
+        self::assertSame(429, $this->lastAnswerStatus($ids[2]));
+        foreach ([$ids[2], $ids[3]] as $id) {
+            self::assertSame(Meta::PENDING, WpStub::$meta[$id][Meta::STATUS]);
+            self::assertArrayNotHasKey(Meta::SUBMITTED_AT, WpStub::$meta[$id]);
+        }
+
+        // The mock delivers the first two, which empties its queue; the pause then ends.
+        WpStub::save($state);
+        $this->worker($mock, $env);
+        WpStub::load($state);
+        $offset = 61;
+        foreach (WpStub::$events as $event) {
+            if ($event['hook'] === Submission::HOOK_RETRY && $event['at'] <= time() + $offset) {
+                do_action($event['hook'], ...$event['args']);
+            }
+        }
+
+        self::assertCount(4, WpStub::$requests, 'one more request for both');
+        $last = json_decode(WpStub::$requests[3]['args']['body'], true)['elementy'];
+        self::assertSame(['wp:' . $ids[2], 'wp:' . $ids[3]], array_column($last, 'id'));
+        foreach ([$ids[2], $ids[3]] as $id) {
+            self::assertNotSame('', WpStub::$meta[$id][Meta::SUBMITTED_AT] ?? '', 'the mock took it: in `przyjete`');
+        }
+
+        WpStub::save($state);
+        $this->worker($mock, $env);
+        WpStub::load($state);
+        foreach ($ids as $id) {
+            self::assertSame(['1', 'bezpieczne'], [WpStub::$comments[$id]['comment_approved'], WpStub::$meta[$id][Meta::STATUS] ?? null]);
+        }
+    }
+
+    /**
+     * Starts the stand-in site and the mock gateway, and hooks the plugin into this process
+     * with the mock as its gateway.
+     *
+     * @param array<string,string> $mockEnv More variables for the mock.
+     * @param callable|null        $clock   The plugin's clock in this process (`time()`).
+     * @return array{0:string,1:string,2:array<string,string>} The mock's directory, the site
+     *     state file and the mock's variables.
+     */
+    private function start(array $mockEnv, ?callable $clock = null): array
+    {
+        $mock = self::mockDirectory();
+        $state = $this->dir . '/state.json';
+        $sitePort = $this->serve(__DIR__ . '/fixtures', 'site.php', ['MINOS_SITE_STATE' => $state]);
+        $env = $mockEnv + [
+            'MINOS_MOCK_WEBHOOK_URL'    => "http://127.0.0.1:{$sitePort}/wp-json/minos/v1/webhook",
+            'MINOS_MOCK_WEBHOOK_SECRET' => self::SECRET,
+            'MINOS_MOCK_KEY'            => self::KEY,
+            'MINOS_MOCK_DATA_DIR'       => $this->dir . '/mock',
+            'MINOS_MOCK_DELAY_S'        => '0',
+        ];
+        $mockPort = $this->serve($mock . '/public', null, $env);
+
+        WpStub::$options[Settings::OPTION] = ['enabled' => true, 'gateway_url' => "http://127.0.0.1:{$mockPort}",
+            'failure_mode' => Settings::FAIL_CLOSED, 'blocked_mode' => Settings::HOLD] + Settings::defaults();
+        WpStub::$options[Settings::KEY_OPTION] = self::KEY;
+        WpStub::$options[Settings::SECRET_OPTION] = self::SECRET;
+        WpStub::$network = true;
+        (new Plugin(new Platform($clock)))->hook(__DIR__ . '/../../minos-moderation.php');
+        return [$mock, $state, $env];
+    }
+
+    /**
+     * The HTTP status the plugin logged for a comment's last failed request.
+     *
+     * @param int $id The comment.
+     * @return int|null The status.
+     */
+    private function lastAnswerStatus(int $id): ?int
+    {
+        $status = null;
+        foreach (WpStub::$options[Log::OPTION] ?? [] as $entry) {
+            if (($entry['comment'] ?? null) === $id) {
+                $status = $entry['http'];
+            }
+        }
+        return $status;
+    }
+
     /**
      * The masked comment, as a property of what was sent: published only as the sent text
      * with characters turned into `█` (the same length, nothing else changed); a masked text
@@ -142,9 +221,10 @@ final class EndToEndTest extends TestCase
     {
         $sent = null;
         foreach (WpStub::$requests as $request) {
-            $item = json_decode($request['args']['body'], true)['elementy'][0];
-            if ($item['id'] === 'wp:' . $id) {
-                $sent = $item['tekst'];
+            foreach (json_decode($request['args']['body'], true)['elementy'] as $item) {
+                if ($item['id'] === 'wp:' . $id) {
+                    $sent = $item['tekst'];
+                }
             }
         }
         self::assertIsString($sent, 'the censored comment was sent');

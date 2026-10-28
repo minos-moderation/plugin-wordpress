@@ -303,11 +303,32 @@ final class SubmissionTest extends PluginTestCase
             }
             self::assertNull($this->plugin->log->lastConfigError(), 'not a configuration error');
 
-            // The first accepted comment ends it.
-            $this->post('Komentarz po odnowieniu limitu.');
-            self::assertStringNotContainsString('dzienny limit', $this->adminNotices());
-            self::assertStringNotContainsString('dzienny limit', $this->settingsPage());
+            // A comment written during the pause is not sent, and gets the failure mode at
+            // once: the gateway said it refuses until after its timeout.
+            $this->now += 3600;
+            $next = $this->post('Komentarz w czasie wyczerpanego limitu.');
+            self::assertCount(1, WpStub::$requests, $mode);
+            self::assertSame([Meta::UNASSESSED, $approved, 'limit_dobowy_klucza'],
+                [$this->field($next, Meta::STATUS), $this->field($next, 'comment_approved'), $this->field($next, Meta::ERROR)], $mode);
+            self::assertStringContainsString('dzienny limit', $this->adminNotices(), 'still running');
         }
+    }
+
+    public function testAnAcceptedCommentEndsThePauseAndItsNotice(): void
+    {
+        $this->configure();
+        // Another request's answer stores the daily limit while this comment's request is on
+        // its way (two authors at once); the gateway then takes this comment.
+        add_filter('pre_http_request', function ($pre, $args) {
+            $this->plugin->log->pause('limit_dobowy_klucza', $this->now + 36000, true);
+            return WpStub::accepted($args);
+        }, 10, 2);
+        $id = $this->post('Komentarz przyjęty tuż po odmowie innego.');
+
+        self::assertSame((string)$this->now, $this->field($id, Meta::SUBMITTED_AT));
+        self::assertNull($this->plugin->log->sendingPause(), 'the gateway takes comments again');
+        self::assertStringNotContainsString('dzienny limit', $this->adminNotices());
+        self::assertStringNotContainsString('dzienny limit', $this->settingsPage());
     }
 
     public function testAnOverloadShowsItsOwnShorterHourAndTheCommentWaits(): void
@@ -333,9 +354,13 @@ final class SubmissionTest extends PluginTestCase
         WpStub::answer(429, ['blad' => ['kod' => 'limit_minutowy_klucza', 'ponow_za_s' => 30]]);
         WpStub::answer(503, ['blad' => ['kod' => 'kolejka_niedostepna']]);
         $this->post('Limit minutowy.');
+        self::assertNull($this->plugin->log->pausedUntil());
+        $this->now += 30;
         $this->post('Kolejka niedostępna.');
 
-        self::assertNull($this->plugin->log->pausedUntil());
+        self::assertCount(2, WpStub::$requests);
+        self::assertNull($this->plugin->log->pausedUntil(), 'the pause runs, but no notice');
+        self::assertNotNull($this->plugin->log->sendingPause());
     }
 
     public function testTheGatewaysPauseIsComparedAsGivenNotAsTheRetryIsCapped(): void
@@ -344,12 +369,22 @@ final class SubmissionTest extends PluginTestCase
         WpStub::answer(429, ['blad' => ['kod' => 'limit_dobowy_klucza', 'ponow_za_s' => 90000]]);
         $late = $this->post('Pauza dłuższa niż doba i niż czas oczekiwania.');
         self::assertSame($this->now + 90000, $this->plugin->log->pausedUntil()['until'], 'the hour the gateway gave');
+        self::assertSame(Meta::UNASSESSED, $this->field($late, Meta::STATUS));
+        // During that pause a comment with a day's timeout gets the failure mode at once too.
+        $during = $this->post('Komentarz w czasie pauzy dłuższej niż doba.');
+        self::assertSame(Meta::UNASSESSED, $this->field($during, Meta::STATUS));
+        self::assertCount(1, WpStub::$requests);
+
+        $this->setUp();
+        $this->configure(['timeout_min' => Settings::MAX_TIMEOUT_MIN]);
         WpStub::answer(429, ['blad' => ['kod' => 'limit_dobowy_klucza', 'ponow_za_s' => 3600]]);
         $soon = $this->post('Pauza godzinna przy dobowym czasie oczekiwania.');
+        $during = $this->post('Komentarz w czasie pauzy godzinnej.');
 
-        self::assertSame(Meta::UNASSESSED, $this->field($late, Meta::STATUS));
-        self::assertTrue($this->pending($soon), 'an hour ends before a day: it waits');
-        self::assertSame((string)($this->now + 3600), $this->field($soon, Meta::RETRY_AT));
+        foreach ([$soon, $during] as $id) {
+            self::assertTrue($this->pending($id), 'an hour ends before a day: it waits');
+            self::assertSame((string)($this->now + 3600), $this->field($id, Meta::RETRY_AT));
+        }
     }
 
     public function testWithoutAPauseTheBackoffDoublesFromAMinute(): void
@@ -390,13 +425,12 @@ final class SubmissionTest extends PluginTestCase
     public function testARetryThatIsNotDueOrNotPendingSendsNothing(): void
     {
         $this->configure();
+        $accepted = $this->post('Komentarz już przyjęty.');
         WpStub::networkFailure();
         $id = $this->post('Komentarz czekający na ponowienie.');
 
         do_action(Submission::HOOK_RETRY, $id);
-        self::assertCount(1, WpStub::$requests, 'not due yet');
-
-        $accepted = $this->post('Komentarz już przyjęty.');
+        self::assertCount(2, WpStub::$requests, 'not due yet');
         do_action(Submission::HOOK_RETRY, $accepted);
         self::assertCount(2, WpStub::$requests, 'accepted already');
     }
@@ -460,7 +494,8 @@ final class SubmissionTest extends PluginTestCase
         WpStub::answer(429, ['blad' => ['kod' => '<script>' . self::SECRET, 'ponow_za_s' => 5]]);
         $this->post('Drugi poufny komentarz.');
 
-        $stored = json_encode([WpStub::$options[Log::OPTION], WpStub::$options[Log::CONFIG_ERROR_OPTION]]);
+        $stored = json_encode([WpStub::$options[Log::OPTION], WpStub::$options[Log::CONFIG_ERROR_OPTION],
+            WpStub::$options[Log::PAUSE_OPTION]]);
         self::assertStringContainsString('brak_webhooka', $stored, 'the log must hold the code');
         foreach ([self::KEY, self::SECRET, 'Poufny', 'script'] as $secret) {
             self::assertStringNotContainsString($secret, $stored);
@@ -474,7 +509,9 @@ final class SubmissionTest extends PluginTestCase
         for ($i = 0; $i < Log::MAX_ENTRIES + 5; $i++) {
             WpStub::answer(429, ['blad' => ['kod' => 'limit_minutowy_klucza', 'ponow_za_s' => 30]]);
             $this->post('Komentarz numer ' . $i . '.');
+            $this->now += 30;
         }
+        self::assertCount(Log::MAX_ENTRIES + 5, WpStub::$requests, 'each was sent after the pause before it');
         self::assertCount(Log::MAX_ENTRIES, $this->plugin->log->entries());
     }
 

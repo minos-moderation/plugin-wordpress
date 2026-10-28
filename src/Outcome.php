@@ -261,6 +261,30 @@ final class Outcome
     }
 
     /**
+     * {@see failed} for a step several comments shared: one request that carried them all
+     * failed on the way. One log entry, under the first comment's id, and the code on each
+     * comment; they all keep waiting. It never throws itself.
+     *
+     * @param string         $step One of the `Log::STEP_*` names.
+     * @param array<int,int> $ids  The comments, the first one first.
+     * @return void
+     */
+    public function failedTogether(string $step, array $ids): void
+    {
+        foreach (array_values($ids) as $index => $id) {
+            if ($index === 0) {
+                $this->failed($step, $id);
+                continue;
+            }
+            try {
+                $this->wp->setMeta($id, Meta::ERROR, Log::failureCode($step));
+            } catch (\Throwable $e) {
+                // Nothing more can be recorded; the comment still waits.
+            }
+        }
+    }
+
+    /**
      * The failure mode for a comment whose verdict can no longer arrive in time. Such a
      * comment was never assessed, so an edit of it is sent again ({@see Meta::TIMED_OUT}).
      *

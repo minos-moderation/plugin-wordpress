@@ -11,9 +11,11 @@ defined('ABSPATH') || exit;
  *
  * - A comment that waited past the receive timeout gets the failure mode: the gateway
  *   gives a delivery up after its TTL, and its worker may have been down for all of it.
- * - A retry that fell due is sent again, in case its own one-off event was lost. The
- *   sweep sends at most {@see MAX_SUBMISSIONS} and stops at the first answer that asks to
- *   wait, so one run stays short while the gateway is unavailable.
+ * - The retries that fell due are sent again, in requests of up to
+ *   {@see Submission::MAX_ITEMS} comments ({@see Submission::sendDue}): the gateway's limits
+ *   count requests, not items. The sweep sends at most {@see MAX_REQUESTS} and stops at the
+ *   first answer that asks to wait, so one run stays short while the gateway is
+ *   unavailable; while the gateway's pause runs it sends nothing.
  *
  * Each comment is handled on its own: an exception from another plugin's hook is recorded
  * by step and comment id ({@see Outcome::failed}) and the run goes on.
@@ -32,8 +34,13 @@ final class Sweeper
     /** The most pending comments one run looks at. */
     public const BATCH = 200;
 
-    /** The most comments one run sends. */
-    public const MAX_SUBMISSIONS = 10;
+    /**
+     * The most requests one run sends, each up to {@see Submission::MAX_ITEMS} comments.
+     * Each may take {@see Submission::TIMEOUT_S}: five keep the worst case of a run at
+     * half of the ten one-comment requests it was, and carry a hundred comments, ten times
+     * as many. What is left stays due for the next run or its own retry event.
+     */
+    public const MAX_REQUESTS = 5;
 
     /** @var Platform */
     private $wp;
@@ -100,27 +107,26 @@ final class Sweeper
         if (!$this->settings->all()['enabled']) {
             return;
         }
-        $sent = 0;
-        $sending = true;
+        $due = [];
         foreach ($this->wp->pendingCommentIds(self::BATCH) as $id) {
             // One comment that fails (another plugin's hook throwing) stops nothing else: it
             // keeps waiting, and the next sweep does its step again.
-            $step = Log::STEP_TIMEOUT;
             try {
                 if ($this->submission->pastDeadline($id)) {
                     $this->outcome->timedOut($id, null);
-                    continue;
+                } elseif ($this->submission->due($id)) {
+                    $due[] = $id;
                 }
-                $retryAt = $this->wp->meta($id, Meta::RETRY_AT);
-                if (!$sending || $retryAt === '' || (int)$retryAt > $this->wp->now()) {
-                    continue;
-                }
-                $step = Log::STEP_SUBMIT;
-                $sent++;
-                $answer = $this->submission->submit($id);
-                $sending = $answer !== Submission::RETRY && $sent < self::MAX_SUBMISSIONS;
             } catch (\Throwable $e) {
-                $this->outcome->failed($step, $id);
+                $this->outcome->failed(Log::STEP_TIMEOUT, $id);
+            }
+        }
+        // Each comment and each request is isolated inside; anything else waits for the next run.
+        try {
+            $this->submission->sendDue($due, self::MAX_REQUESTS);
+        } catch (\Throwable $e) {
+            if ($due !== []) {
+                $this->outcome->failed(Log::STEP_SUBMIT, $due[0]);
             }
         }
     }

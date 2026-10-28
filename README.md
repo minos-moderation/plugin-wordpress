@@ -108,7 +108,11 @@ Zasady, które obowiązują zawsze:
 - **Spóźniony werdykt.** Jeśli przy fail-open komentarz został opublikowany bez werdyktu
   (minął czas oczekiwania), a werdykt nadejdzie później, wtyczka go stosuje: „zablokowane”
   przenosi komentarz do moderacji, „ocenzurowane” działa zgodnie z ustawieniem. Nie robi
-  tego, jeśli w międzyczasie ktoś zmienił status komentarza albo go edytował.
+  tego, jeśli w międzyczasie ktoś zmienił status komentarza; edycję opisuje rozdział
+  „Edycja komentarza”.
+- **Werdykt dotyczy tylko wysłanego tekstu.** Przed zastosowaniem każdego werdyktu wtyczka
+  sprawdza, czy komentarz nadal ma tekst, który wysłała do oceny. Jeśli nie, werdykt nie
+  jest stosowany, a komentarz zostaje wstrzymany i wysłany ponownie.
 - **Nie są wysyłane:** komentarze użytkowników, którzy mogą moderować komentarze
   (administratorzy, redaktorzy), komentarze oznaczone już przez WordPressa lub inną
   wtyczkę jako spam albo przeniesione do kosza, a także pingbacki, trackbacki i inne typy
@@ -122,6 +126,21 @@ Zasady, które obowiązują zawsze:
   wysłany tekst, i różnić się od niego wyłącznie znakami `█`. Komentarz z formatowaniem
   (pogrubienie, cytat, odnośnik) trafia do moderatora, a zamaskowany tekst widać
   w kolumnie **Minos**.
+
+## Edycja komentarza
+
+- **Komentarz czekający na werdykt** (albo taki, któremu werdykt nie nadszedł w czasie
+  oczekiwania — wstrzymany przy fail-closed albo opublikowany przy fail-open), którego
+  tekst ktoś zmieni, jest wysyłany do oceny ponownie jako nowa wersja (`wp:<numer>.1`,
+  `wp:<numer>.2`…), z nowym czasem oczekiwania. Komentarz opublikowany przy fail-open
+  wraca na czas tej oceny do moderacji. Werdykt dla wcześniejszej wersji nie zmienia już
+  niczego.
+- Tak samo działa edycja przez moderatora: dopóki komentarz nie został oceniony, wtyczka
+  ocenia jego aktualny tekst, bo w WordPressie komentarze edytują tylko moderatorzy
+  i autorzy wpisów, a werdykt dotyczy wyłącznie tekstu, który brama widziała.
+- **Komentarz już oceniony** (bezpieczny, ocenzurowany, zablokowany) po edycji nie jest
+  wysyłany ponownie: zmiana treści po werdykcie jest decyzją osoby, która ją wprowadziła.
+- Zmiana samych danych autora (bez zmiany tekstu) niczego nie wysyła.
 
 ## Fail-open i fail-closed
 
@@ -144,7 +163,8 @@ systemowe zadanie cron wywołujące `wp-cron.php` — inaczej mogą się opóźn
 
 Wysyłane są wyłącznie:
 
-- identyfikator komentarza w postaci `wp:<numer>` (sam numer, bez treści);
+- identyfikator komentarza w postaci `wp:<numer>` (sam numer, bez treści), a dla tekstu
+  zmienionego przed oceną `wp:<numer>.<wersja>`;
 - tekst komentarza bez znaczników HTML, razem z tekstem atrybutów `title` i `alt`
   (czytelnik też go widzi) — **pierwsze 3000 znaków**: dłuższy komentarz jest oceniany na
   podstawie pierwszych 3000 znaków, a dalsza część nie jest oceniana (patrz „Jak to

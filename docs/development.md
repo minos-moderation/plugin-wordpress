@@ -39,6 +39,7 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
    API which does not fire `comment_post`, `rest_insert_comment` marks it `oczekuje` and
    sends it synchronously (`wp_remote_post`, 10 s, no redirects). The body is one item:
    `{"id":"wp:<ID>","tekst":…,"profil":…,"meta":{"links":…,"link_domains":[…],"author_first_post":…}}`
+   (`wp:<ID>.<n>` for the n-th revision, see below)
    (`link_domains` only when the content has links: at most 10 registrable domains, found
    with a short list of second-level suffixes instead of the Public Suffix List). A plain
    text over 3000 characters is marked `_minos_cut`.
@@ -47,8 +48,11 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
    fallback); anything else → a configuration error: the failure mode, a log entry and an
    admin notice.
 4. The webhook applies the verdict to a comment still marked `oczekuje`, or to one the
-   plugin published under fail-open (`_minos_auto_published`); anything else gets `200`
-   and nothing else. The moderator's e-mail WordPress held back goes out from WP-Cron.
+   plugin published under fail-open (`_minos_auto_published`), when the verdict is for the
+   comment's current revision (`_minos_revision`) and the comment still reads as the text
+   that was sent (`_minos_sent_hash`); anything else gets `200` and nothing else, and a
+   comment whose text changed is sent again as its next revision. The moderator's e-mail
+   WordPress held back goes out from WP-Cron.
 5. The sweep gives the failure mode to a comment that waited past the timeout (at least
    20 minutes), counted from the gateway's `202`, or from the hold while it was never
    accepted.
@@ -65,8 +69,17 @@ Decisions worth knowing before changing anything:
   keeps its status; only the verdict is recorded.
 - **Late verdicts.** Under fail-open the timeout publishes and sets
   `_minos_auto_published`; a verdict arriving later is applied (`zablokowane` → hold,
-  `ocenzurowane` → per setting). `transition_comment_status` and `edit_comment` clear the
-  flag, so a person's status change or edit after the publication stands.
+  `ocenzurowane` → per setting). `transition_comment_status` clears the flag, so a
+  person's status change after the publication stands.
+- **Revisions.** A verdict is about the text that was sent. `Submission::onEdit`
+  (`edit_comment`) sends a comment again as `wp:<ID>.<n>` (`_minos_revision`, absent = 0,
+  fresh `_minos_held_at`) when its text changed while it waited for its verdict, or after
+  the timeout left it unassessed (`_minos_timed_out`; a fail-open publication goes back to
+  hold, as in the phpBB plugin). An edit of an assessed comment is the editor's decision
+  and is not sent (reassessing those is a separate, postponed item). Before every verdict
+  the receiver compares `_minos_sent_hash` with the current text; a mismatch (a write
+  without `edit_comment`) sends the next revision instead of applying the verdict. The
+  plugin's own masked write is not an edit (`Outcome::writing`).
 - **The plain text never goes empty by accident.** An empty text gets the failure mode,
   so a regex in `Text` that gives up (a PCRE limit returns null) falls back to its input,
   and trimming is a byte scan over the 26 characters PCRE calls whitespace, not a regex

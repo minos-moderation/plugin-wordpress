@@ -11,14 +11,16 @@ defined('ABSPATH') || exit;
 /**
  * Applies what the gateway decided, or the failure mode when it decided nothing.
  *
- * The plugin never guesses a verdict. Five rules sit on top of the administrator's
+ * The plugin never guesses a verdict. Six rules sit on top of the administrator's
  * settings:
  * - it publishes only a comment WordPress itself would have published: a comment that the
  *   site's own rules held (manual approval, moderation keys, too many links) stays held
  *   whatever the verdict, so Minos adds a check and never removes one;
  * - it changes only a comment that is still held, or one it published itself under
- *   fail-open and nobody touched since: when a person approved, spammed, trashed or edited
- *   it, the verdict is recorded and the person's decision stays;
+ *   fail-open and nobody touched since: when a person approved, spammed or trashed it, the
+ *   verdict is recorded and the person's decision stays;
+ * - a verdict applies only to the text that was sent: the receiver sends a comment that no
+ *   longer reads as that text again, as its next revision;
  * - a comment longer than the gateway assesses (3000 characters) was assessed on its
  *   beginning only, so no verdict publishes it: `bezpieczne` gets the failure mode and
  *   `ocenzurowane` is held;
@@ -53,6 +55,14 @@ final class Outcome
     private $log;
 
     /**
+     * True while the plugin itself writes a comment's content, so the `edit_comment` it
+     * fires is not taken for a person's edit.
+     *
+     * @var bool
+     */
+    private $writing = false;
+
+    /**
      * @param Platform $wp       The WordPress adapter.
      * @param Settings $settings The settings.
      * @param Log      $log      The administrator's log.
@@ -65,17 +75,59 @@ final class Outcome
     }
 
     /**
-     * Whether a delivered verdict may still change a comment: it waits for its verdict, or
-     * it stands published by the plugin's own fail-open decision and nobody touched it
-     * since. Anything else is a repeated or a late delivery with nothing left to do.
+     * Whether a delivered verdict may still change a comment: it is for the comment's
+     * current revision, and the comment waits for its verdict or stands published by the
+     * plugin's own fail-open decision with nobody touching it since. Anything else is a
+     * repeated delivery, a late one with nothing left to do, or a verdict for a text the
+     * comment no longer has.
      *
-     * @param int $id The comment.
+     * @param int $id       The comment.
+     * @param int $revision The revision the verdict is for (0 for `wp:<id>`).
      * @return bool The answer.
      */
-    public function awaitsVerdict(int $id): bool
+    public function awaitsVerdict(int $id, int $revision): bool
     {
-        return $this->wp->meta($id, Meta::STATUS) === Meta::PENDING
-            || $this->wp->meta($id, Meta::AUTO_PUBLISHED) === '1';
+        return $revision === (int)$this->wp->meta($id, Meta::REVISION)
+            && ($this->wp->meta($id, Meta::STATUS) === Meta::PENDING
+                || $this->wp->meta($id, Meta::AUTO_PUBLISHED) === '1');
+    }
+
+    /**
+     * Whether the comment still reads as the text that was sent: its plain text, cut as it
+     * was for sending, has the hash recorded when it was sent. A verdict is about that text
+     * only; for an edited comment it says nothing.
+     *
+     * @param int $id The comment.
+     * @return bool The answer; false for a comment that is gone or was never sent.
+     */
+    public function readsAsSent(int $id): bool
+    {
+        $comment = $this->wp->comment($id);
+        $sent = $this->wp->meta($id, Meta::SENT_HASH);
+        return $comment !== null && $sent !== ''
+            && hash_equals($sent, self::sentHash((string)$comment->comment_content));
+    }
+
+    /**
+     * The hash the submission records for a content: of its plain text, cut to what the
+     * gateway assesses.
+     *
+     * @param string $content The stored comment content.
+     * @return string SHA-256, hex.
+     */
+    public static function sentHash(string $content): string
+    {
+        return hash('sha256', Text::cut(Text::plain($content)));
+    }
+
+    /**
+     * Whether the plugin is writing a comment's content right now ({@see writing}).
+     *
+     * @return bool The answer.
+     */
+    public function writing(): bool
+    {
+        return $this->writing;
     }
 
     /**
@@ -160,6 +212,33 @@ final class Outcome
     }
 
     /**
+     * The failure mode for a comment whose verdict can no longer arrive in time. Such a
+     * comment was never assessed, so an edit of it is sent again ({@see Meta::TIMED_OUT}).
+     *
+     * @param int         $id    The comment.
+     * @param string|null $error The refusal that made the wait hopeless, or null.
+     * @return void
+     */
+    public function timedOut(int $id, ?string $error): void
+    {
+        $this->wp->setMeta($id, Meta::TIMED_OUT, '1');
+        $this->withoutVerdict($id, $error);
+    }
+
+    /**
+     * Ends the wait of a comment whose text changed since it was sent and which a person
+     * decided on meanwhile: the verdict is for another text, and the person's decision
+     * stands. Nothing but the status changes.
+     *
+     * @param int $id The comment.
+     * @return void
+     */
+    public function abandon(int $id): void
+    {
+        $this->settle($id, Meta::UNASSESSED);
+    }
+
+    /**
      * `notify_moderator` filter: no "awaiting moderation" e-mail for a comment that is held
      * only until its verdict arrives. The e-mail follows if the outcome holds it.
      *
@@ -207,17 +286,6 @@ final class Outcome
         if (is_object($comment) && isset($comment->comment_ID)) {
             $this->forgetAutoPublication((int)$comment->comment_ID);
         }
-    }
-
-    /**
-     * `edit_comment` action: so is an edit.
-     *
-     * @param int|string $commentId The comment.
-     * @return void
-     */
-    public function onEdit($commentId): void
-    {
-        $this->forgetAutoPublication((int)$commentId);
     }
 
     /**
@@ -394,12 +462,13 @@ final class Outcome
     }
 
     /**
-     * Forgets that the plugin published a comment under fail-open.
+     * Forgets that the plugin published a comment under fail-open: a person's status change
+     * or edit after that publication stands.
      *
      * @param int $id The comment.
      * @return void
      */
-    private function forgetAutoPublication(int $id): void
+    public function forgetAutoPublication(int $id): void
     {
         if ($id > 0 && $this->wp->meta($id, Meta::AUTO_PUBLISHED) === '1') {
             $this->wp->deleteMeta($id, Meta::AUTO_PUBLISHED);
@@ -439,12 +508,12 @@ final class Outcome
         }
         $html = Text::asHtml($masked);
         $this->wp->setMeta($id, Meta::ORIGINAL, $original);
-        if ($this->wp->replaceContent($id, $html) && $this->content($id) === $html) {
+        if ($this->replaceContent($id, $html) && $this->content($id) === $html) {
             return true;
         }
 
         if ($this->content($id) !== $original) {
-            $this->wp->replaceContent($id, $original);
+            $this->replaceContent($id, $original);
         }
         // Kept when the original could not be put back: it is then the only copy.
         if ($this->content($id) === $original) {
@@ -453,6 +522,23 @@ final class Outcome
         $this->wp->setMeta($id, Meta::ERROR, Meta::ERROR_MASKED_WRITE);
         $this->log->record($id, null, Meta::ERROR_MASKED_WRITE);
         return false;
+    }
+
+    /**
+     * Writes a comment's content; the `edit_comment` it fires is the plugin's own.
+     *
+     * @param int    $id   The comment.
+     * @param string $html The new content, safe as HTML.
+     * @return bool Whether WordPress reported the update as done.
+     */
+    private function replaceContent(int $id, string $html): bool
+    {
+        $this->writing = true;
+        try {
+            return $this->wp->replaceContent($id, $html);
+        } finally {
+            $this->writing = false;
+        }
     }
 
     /**

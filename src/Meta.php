@@ -18,8 +18,15 @@ final class Meta
     /** Where the comment stands: {@see PENDING} or the verdict (`bezpieczne`…`nieocenione`). */
     public const STATUS = '_minos_status';
 
-    /** When the plugin held the comment for assessment (unix seconds). */
+    /** When the plugin held the comment for assessment, or for its current revision (unix seconds). */
     public const HELD_AT = '_minos_held_at';
+
+    /**
+     * Which text of the comment the gateway assesses: absent or 0 for the first, `n` for the
+     * text after the n-th edit that needed a new assessment. The item id is `wp:<id>` for
+     * revision 0 and `wp:<id>.<n>` after it; a verdict for any other revision changes nothing.
+     */
+    public const REVISION = '_minos_revision';
 
     /** When the gateway accepted it with `202` (unix seconds). */
     public const SUBMITTED_AT = '_minos_submitted_at';
@@ -54,7 +61,10 @@ final class Meta
     /** How many characters of the plain text were sent for assessment. */
     public const SENT_CHARS = '_minos_sent_chars';
 
-    /** SHA-256 of the text that was sent, to notice an edit before a masked text lands. */
+    /**
+     * SHA-256 of the text that was sent: a verdict applies only while the comment still
+     * reads as that text. Absent while the current revision has not been sent yet.
+     */
     public const SENT_HASH = '_minos_sent_hash';
 
     /**
@@ -70,11 +80,17 @@ final class Meta
      */
     public const AUTO_PUBLISHED = '_minos_auto_published';
 
+    /**
+     * `1` when the failure mode applied because no verdict could arrive in time (the receive
+     * timeout passed): such a comment was never assessed, so an edit sends it again.
+     */
+    public const TIMED_OUT = '_minos_timed_out';
+
     /** Every key above: what `uninstall.php` deletes. */
     public const ALL = [
-        self::STATUS, self::HELD_AT, self::SUBMITTED_AT, self::WP_APPROVED, self::RETRY_AT,
+        self::STATUS, self::HELD_AT, self::REVISION, self::SUBMITTED_AT, self::WP_APPROVED, self::RETRY_AT,
         self::ATTEMPTS, self::ORIGINAL, self::MASKED, self::SUPPORT, self::CATEGORIES, self::ERROR,
-        self::SENT_CHARS, self::SENT_HASH, self::CUT, self::AUTO_PUBLISHED,
+        self::SENT_CHARS, self::SENT_HASH, self::CUT, self::AUTO_PUBLISHED, self::TIMED_OUT,
     ];
 
     /** {@see STATUS} of a comment waiting for its verdict (a wire-style value, Polish). */

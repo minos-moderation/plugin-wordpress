@@ -101,7 +101,7 @@ final class Sweeper
         $sending = true;
         foreach ($this->wp->pendingCommentIds(self::BATCH) as $id) {
             if ($this->submission->pastDeadline($id)) {
-                $this->outcome->withoutVerdict($id, null);
+                $this->outcome->timedOut($id, null);
                 continue;
             }
             $retryAt = $this->wp->meta($id, Meta::RETRY_AT);

@@ -33,6 +33,9 @@ final class UninstallTest extends PluginTestCase
         $heldMasked = $this->post('<em>brzydki</em> komentarz');
         $this->deliver(self::verdict($heldMasked, 'ocenzurowane', ['ocenzurowany' => '███████ komentarz']));
         self::assertSame('███████ komentarz', $this->field($heldMasked, Meta::MASKED), 'the scenario stores every kind of meta');
+        $edited = $this->post('Komentarz przed edycją.');
+        wp_update_comment(['comment_ID' => $edited, 'comment_content' => 'Komentarz po edycji.']);
+        self::assertSame('1', $this->field($edited, Meta::REVISION));
         WpStub::$options['inna_wtyczka'] = 'zostaje';
         WpStub::$meta[$censored]['_inna_wtyczka'] = 'zostaje';
         WpStub::$events[] = ['at' => $this->now, 'hook' => 'inna_wtyczka_cron', 'args' => [], 'recurrence' => null];

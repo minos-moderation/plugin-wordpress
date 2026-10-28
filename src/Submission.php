@@ -25,6 +25,12 @@ defined('ABSPATH') || exit;
  *
  * While moderation is switched off nothing is sent, not even a retry: comments already
  * waiting stay in WordPress's moderation queue for a person.
+ *
+ * An edit that changes the text of a comment still waiting for its verdict, or of one the
+ * receive timeout left without an assessment (held, or published under fail-open), sends
+ * it again as its next revision, `wp:<id>.<n>`; a published one goes back to hold while
+ * the new text is assessed. An edit of a comment the gateway assessed is a person's
+ * decision and is not sent.
  */
 final class Submission
 {
@@ -142,6 +148,87 @@ final class Submission
     }
 
     /**
+     * `edit_comment` action: an edit that changed the text of a comment that was never
+     * assessed sends it again ({@see reassess}). The plugin's own write of a masked text is
+     * not an edit; an edit of an assessed comment is the editor's decision; while the plugin
+     * is switched off an edit only ends a fail-open publication's wait for a late verdict.
+     *
+     * @param int|string $commentId The comment.
+     * @return void
+     */
+    public function onEdit($commentId): void
+    {
+        $id = (int)$commentId;
+        if ($id <= 0 || $this->outcome->writing()) {
+            return;
+        }
+        $status = $this->wp->meta($id, Meta::STATUS);
+        $unassessed = $status === Meta::PENDING
+            || ($status === Meta::UNASSESSED && $this->wp->meta($id, Meta::TIMED_OUT) === '1');
+        if (!$this->settings->all()['enabled'] || !$unassessed) {
+            $this->outcome->forgetAutoPublication($id);
+            return;
+        }
+        // Not sent yet, or the text is unchanged (an edit of the author's name, say): the
+        // revision on its way is still the right one.
+        if ($this->wp->meta($id, Meta::SENT_HASH) === '' || $this->outcome->readsAsSent($id)) {
+            return;
+        }
+        $this->reassess($id);
+    }
+
+    /**
+     * Sends a comment again as its next revision, because its text is no longer the one
+     * that was sent. A comment the plugin published under fail-open goes back to hold while
+     * the new text is assessed.
+     *
+     * @param int $id The comment.
+     * @return bool False when the comment is gone or a person decided on it meanwhile
+     *     (approved, spammed or trashed it): then nothing is sent.
+     */
+    public function reassess(int $id): bool
+    {
+        if (!$this->reopen($id)) {
+            return false;
+        }
+        $this->submit($id);
+        return true;
+    }
+
+    /**
+     * Starts the next revision of a held comment, or of one the plugin published under
+     * fail-open (held again), with a fresh receive timeout.
+     *
+     * @param int $id The comment.
+     * @return bool Whether the comment now waits for the new revision's verdict.
+     */
+    private function reopen(int $id): bool
+    {
+        $comment = $this->wp->comment($id);
+        if ($comment === null) {
+            return false;
+        }
+        $approved = (string)$comment->comment_approved;
+        if ($approved === '1' && $this->wp->meta($id, Meta::AUTO_PUBLISHED) === '1') {
+            $this->wp->deleteMeta($id, Meta::AUTO_PUBLISHED);
+            if (!$this->wp->setStatus($id, 'hold')) {
+                $this->wp->setMeta($id, Meta::AUTO_PUBLISHED, '1');
+                return false;
+            }
+        } elseif ($approved !== '0') {
+            return false;
+        }
+        $this->wp->setMeta($id, Meta::REVISION, (int)$this->wp->meta($id, Meta::REVISION) + 1);
+        $this->wp->setMeta($id, Meta::STATUS, Meta::PENDING);
+        $this->wp->setMeta($id, Meta::HELD_AT, $this->wp->now());
+        foreach ([Meta::SUBMITTED_AT, Meta::RETRY_AT, Meta::ATTEMPTS, Meta::SENT_HASH, Meta::SENT_CHARS,
+            Meta::TIMED_OUT, Meta::ERROR] as $key) {
+            $this->wp->deleteMeta($id, $key);
+        }
+        return true;
+    }
+
+    /**
      * {@see HOOK_RETRY} action: a retry that fell due.
      *
      * @param int|string $commentId The comment.
@@ -235,11 +322,23 @@ final class Submission
         }
         $meta['author_first_post'] = $this->wp->approvedCommentsBy($userId, $email) === 0;
         return [
-            'id'     => 'wp:' . (int)$comment->comment_ID,
+            'id'     => self::itemId((int)$comment->comment_ID, (int)$this->wp->meta((int)$comment->comment_ID, Meta::REVISION)),
             'tekst'  => $text,
             'profil' => $this->settings->all()['profile'],
             'meta'   => $meta,
         ];
+    }
+
+    /**
+     * The item id of a comment's revision: `wp:<id>`, and `wp:<id>.<n>` after the first.
+     *
+     * @param int $id       The comment.
+     * @param int $revision The revision.
+     * @return string The id.
+     */
+    public static function itemId(int $id, int $revision): string
+    {
+        return 'wp:' . $id . ($revision > 0 ? '.' . $revision : '');
     }
 
     /**

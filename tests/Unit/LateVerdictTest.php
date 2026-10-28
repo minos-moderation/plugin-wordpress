@@ -99,19 +99,15 @@ final class LateVerdictTest extends PluginTestCase
         wp_set_comment_status($unapproved, 'approve');
         $trashed = $this->autoPublished('Moderator przeniósł do kosza.');
         wp_set_comment_status($trashed, 'trash');
-        $edited = $this->autoPublished('Moderator poprawił brzydki komentarz.');
-        wp_update_comment(['comment_ID' => $edited, 'comment_content' => 'Moderator poprawił komentarz.']);
         $changes = WpStub::$statusChanges;
 
         $this->deliver(self::verdict($unapproved, 'zablokowane'));
         $this->deliver(self::verdict($trashed, 'zablokowane'));
-        $this->deliver(self::verdict($edited, 'ocenzurowane', ['ocenzurowany' => 'Moderator poprawił ███████ komentarz.']));
 
         self::assertSame($changes, WpStub::$statusChanges);
         self::assertSame('1', $this->field($unapproved, 'comment_approved'));
         self::assertSame('trash', $this->field($trashed, 'comment_approved'));
-        self::assertSame(['1', 'Moderator poprawił komentarz.'],
-            [$this->field($edited, 'comment_approved'), $this->field($edited, 'comment_content')]);
+        // An edit is not a decision on a comment that was never assessed: RevisionTest.
     }
 
     public function testAFailClosedTimeoutIsNotReopenedByALateVerdict(): void

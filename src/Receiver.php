@@ -21,9 +21,10 @@ defined('ABSPATH') || exit;
  * 2. `X-Wergiliusz-Podpis` verified by the bundled `Signature::verify` — `401` otherwise, and
  *    the gateway retries;
  * 3. `WebhookPayload::parse` — `400` for a body that is not a payload; an id the verdict can
- *    no longer change (unknown, handled already — deliveries repeat — or decided by a
- *    person) gets `200` and nothing else;
- * 4. the verdict applied ({@see Outcome});
+ *    no longer change (unknown, handled already — deliveries repeat —, decided by a person,
+ *    or another revision than the comment's current one) gets `200` and nothing else;
+ * 4. the verdict applied ({@see Outcome}) — only while the comment still reads as the text
+ *    that was sent; a comment edited since is sent again as its next revision instead;
  * 5. `200` at once: the only slow step, the e-mail, goes to WP-Cron.
  */
 final class Receiver
@@ -34,8 +35,8 @@ final class Receiver
     /** The route inside it. */
     public const ROUTE = '/webhook';
 
-    /** The item id the plugin sends: `wp:<comment id>`. */
-    private const ID = '/^wp:([1-9][0-9]{0,17})\z/';
+    /** The item id the plugin sends: `wp:<comment id>`, then `wp:<comment id>.<revision>`. */
+    private const ID = '/^wp:([1-9][0-9]{0,17})(?:\.([1-9][0-9]{0,8}))?\z/';
 
     /** @var Platform */
     private $wp;
@@ -46,16 +47,21 @@ final class Receiver
     /** @var Outcome */
     private $outcome;
 
+    /** @var Submission */
+    private $submission;
+
     /**
-     * @param Platform $wp       The WordPress adapter.
-     * @param Settings $settings The settings.
-     * @param Outcome  $outcome  What applies a verdict.
+     * @param Platform   $wp         The WordPress adapter.
+     * @param Settings   $settings   The settings.
+     * @param Outcome    $outcome    What applies a verdict.
+     * @param Submission $submission What sends an edited comment again.
      */
-    public function __construct(Platform $wp, Settings $settings, Outcome $outcome)
+    public function __construct(Platform $wp, Settings $settings, Outcome $outcome, Submission $submission)
     {
         $this->wp = $wp;
         $this->settings = $settings;
         $this->outcome = $outcome;
+        $this->submission = $submission;
     }
 
     /**
@@ -92,10 +98,27 @@ final class Receiver
         }
         if (preg_match(self::ID, $payload['id'], $match) === 1) {
             $id = (int)$match[1];
-            if ($this->outcome->awaitsVerdict($id)) {
-                $this->outcome->verdict($id, $payload);
+            if ($this->outcome->awaitsVerdict($id, (int)($match[2] ?? 0))) {
+                $this->apply($id, $payload);
             }
         }
         return $this->wp->response(200);
+    }
+
+    /**
+     * Applies a verdict to the text it is about, before anything else: a comment that no
+     * longer reads as the text that was sent gets no verdict, and is sent again.
+     *
+     * @param int                 $id      A comment {@see Outcome::awaitsVerdict} accepts.
+     * @param array<string,mixed> $payload The parsed payload.
+     * @return void
+     */
+    private function apply(int $id, array $payload): void
+    {
+        if ($this->outcome->readsAsSent($id)) {
+            $this->outcome->verdict($id, $payload);
+        } elseif (!$this->submission->reassess($id)) {
+            $this->outcome->abandon($id);
+        }
     }
 }

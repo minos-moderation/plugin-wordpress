@@ -470,7 +470,6 @@ final class SubmissionTest extends PluginTestCase
             'no webhook'          => [403, 'brak_webhooka', 'brak_webhooka'],
             'profile not allowed' => [403, 'profil_niedozwolony', 'profil_niedozwolony'],
             'B2B off'             => [404, 'nie_znaleziono', 'nie_znaleziono'],
-            'not a gateway'       => [200, null, 'http_200'],
         ];
     }
 

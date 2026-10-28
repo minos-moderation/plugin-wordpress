@@ -172,9 +172,10 @@ do oceny”). Wtedy:
 
 **Ponawianie.** Gdy brama każe poczekać — odmowa HTTP 429 (limit minutowy, dzienny lub
 „w toku” klucza, wspólny limit usługi, pełna kolejka), błąd HTTP 5xx, przekroczenie czasu
-(HTTP 408) albo brak odpowiedzi — wtyczka wstrzymuje **wszystkie** wysyłki do chwili
-wskazanej przez bramę, a bez niej na rosnącą przerwę (1, 2, 4… minuty, najwyżej godzina);
-przerwa trwa najwyżej dobę, a potem wtyczka pyta bramę znowu. Zmiana klucza API, sekretu
+(HTTP 408) albo brak odpowiedzi — a także po odpowiedzi 2xx innej niż 202 (za przyjęcie
+komentarza wtyczka uznaje tylko odpowiedź 202 bramy; inną odpowiedź 2xx dał ktoś po drodze),
+wtyczka wstrzymuje **wszystkie** wysyłki do chwili wskazanej przez bramę, a bez niej na
+rosnącą przerwę (1, 2, 4… minuty, najwyżej godzina); przerwa trwa najwyżej dobę, a potem wtyczka pyta bramę znowu. Zmiana klucza API, sekretu
 webhooka, adresu bramy albo wyłączenie lub włączenie moderacji kończy przerwę od razu. Limity bramy liczą zapytania, nie
 komentarze, a każda odmowa spowodowana przez klucz zużywa jego limit, więc w czasie przerwy
 nowy komentarz nie jest wysyłany przy dodaniu: czeka wstrzymany, a po przerwie WP-Cron
@@ -182,8 +183,7 @@ wysyła zaległe komentarze razem, do 20 w jednym zapytaniu. Komentarz, którego
 wymieni w odpowiedzi jako przyjętego, jest ponawiany osobno; komentarz, który brama odrzuci
 jako wadliwy, trafia do trybu „Gdy brak werdyktu”, a pozostałe z tego zapytania są
 wysyłane ponownie od razu. Inne odmowy (np. zły klucz, brak webhooka, niedozwolony profil)
-i odpowiedź 2xx inna niż 202 (przyjęcie oznacza tylko 202) nie są ponawiane: to błąd
-konfiguracji (patrz niżej). Ponowienia trwają do upływu czasu
+nie są ponawiane: to błąd konfiguracji (patrz niżej). Ponowienia trwają do upływu czasu
 oczekiwania. Jeśli brama zapowiada, że nie przyjmie komentarzy aż do chwili po upływie
 czasu oczekiwania (np. przy wyczerpanym dziennym limicie zapytań klucza), komentarz od
 razu trafia do trybu „Gdy brak werdyktu” — bez 20 minut czekania; dotyczy to także

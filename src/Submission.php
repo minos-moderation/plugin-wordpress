@@ -35,7 +35,8 @@ defined('ABSPATH') || exit;
  * decision and is not sent.
  *
  * The gateway's limits count requests, not items, and a refusal the key caused spends its
- * allowance. So an answer that asks to wait (`429`, `408`, `5xx`, no answer) pauses every
+ * allowance. So an answer that asks to wait (`429`, `408`, `5xx`, a `2xx` other than `202`,
+ * no answer) pauses every
  * submission until its `ponow_za_s`, or the backoff, ends ({@see Log::sendingPause}): a
  * comment written meanwhile is held for WP-Cron instead of being sent in its author's
  * request. The retries then go out together, up to {@see MAX_ITEMS} comments a request,
@@ -44,8 +45,8 @@ defined('ABSPATH') || exit;
 final class Submission
 {
     /**
-     * The WP-Cron action that retries a comment after a `429`, a `408`, a `5xx` or no
-     * answer, or after the pause the gateway asked for; the request carries the other due
+     * The WP-Cron action that retries a comment after a `429`, a `408`, a `5xx`, a `2xx`
+     * other than `202` or no answer, or after the pause the gateway asked for; the request carries the other due
      * comments too.
      */
     public const HOOK_RETRY = 'minos_moderation_retry';
@@ -724,18 +725,17 @@ final class Submission
      * - `202`: each comment whose item id is in `przyjete` is accepted (its verdict will
      *   come to the webhook); any other is retried after its own backoff (shared rule D9.6:
      *   only `202` with the item in it accepts). Any acceptance ends the refusal pause.
-     * - `429`, `5xx`, `408` (a timeout on the way, as no answer) or no answer: every
-     *   submission waits until the gateway's `ponow_za_s`
+     * - `429`, `5xx`, `408` (a timeout on the way, as no answer), a `2xx` other than `202`
+     *   (something on the way answered for the gateway, which took nothing: shared rule
+     *   F5a) or no answer: every submission waits until the gateway's `ponow_za_s`
      *   or, without it, a doubling backoff ends ({@see Log::pause}); each comment of the
      *   request is retried then, but when the gateway's `ponow_za_s`, as given, ends at or
      *   after the comment's receive timeout, no verdict can come in time and the failure
      *   mode applies at once (shared rule D9.3(a)).
      * - a refusal of one item (`blad.element`, for an id, a text or a length): that comment
      *   gets the failure mode; the others are returned, to be sent again.
-     * - anything else: a configuration error (the key, the webhook, the URL, the profile, or
-     *   a `2xx` other than `202`: something in front of the gateway answered, and only `202`
-     *   accepts); retrying will not help, so the failure mode applies and the administrator
-     *   is told.
+     * - anything else: a configuration error (the key, the webhook, the URL, the profile);
+     *   retrying will not help, so the failure mode applies and the administrator is told.
      *
      * @param array<int,array{id:int,item:array<string,mixed>}> $entries The comments and their items.
      * @param int|null                                          $status  The HTTP status, or null when no answer came.
@@ -751,7 +751,9 @@ final class Submission
         $error = self::error($body);
         $code = $error['kod'] ?? 'http_' . (int)$status;
         $element = $error['element'];
-        $wait = $status === null || $status === 408 || $status === 429 || $status >= 500;
+        // Only `202` accepts (shared rule F5a): any other `2xx` took nothing, and is retried.
+        $wait = $status === null || $status === 408 || $status === 429 || $status >= 500
+            || ($status >= 200 && $status < 300);
         if (!$wait && $element !== null && isset($entries[$element]) && in_array($code, self::ITEM_CODES, true)) {
             // One request, one log entry: under the comment it refused.
             $this->log->record($entries[$element]['id'], $status, $error['kod']);

@@ -242,28 +242,77 @@ final class PauseAndBatchTest extends PluginTestCase
     }
 
     /**
-     * @return array<string,array{0:int}> A `2xx` that is not the gateway's `202`.
+     * @return array<string,array{0:int,1:bool}> A `2xx` that is not the gateway's `202`, and
+     *     whether its body names the comment in `przyjete`.
      */
     public static function otherSuccesses(): array
     {
-        return ['200' => [200], '201' => [201], '204' => [204]];
+        return [
+            '200 naming it'      => [200, true],
+            '200 without przyjete' => [200, false],
+            '201 naming it'      => [201, true],
+            '204'                => [204, false],
+        ];
     }
 
     /**
+     * Shared rule F5a: only `202` accepts; any other `2xx` took nothing and is retried, as
+     * after a `503`, never a configuration error.
+     *
      * @dataProvider otherSuccesses
      */
-    public function testOnly202AcceptsEvenWithEveryItemInPrzyjete(int $status): void
+    public function testAnother2xxIsRetriedAndOnlyThe202AfterItAccepts(int $status, bool $naming): void
     {
         $this->configure();
         $next = 'wp:' . ((WpStub::$comments === [] ? 0 : max(array_keys(WpStub::$comments))) + 1);
-        WpStub::answer($status, ['przyjete' => [$next]]);
+        WpStub::answer($status, $naming ? ['przyjete' => [$next]] : []);
 
         $id = $this->post('Komentarz z odpowiedzią spoza bramy.');
 
-        self::assertSame('wp:' . $id, $next, 'the answer named this very comment');
+        self::assertSame('wp:' . $id, $next, 'the answer was about this very comment');
         self::assertNull($this->field($id, Meta::SUBMITTED_AT), 'not accepted');
-        self::assertSame([Meta::UNASSESSED, 'http_' . $status], [$this->field($id, Meta::STATUS), $this->field($id, Meta::ERROR)]);
-        self::assertSame($status, $this->plugin->log->lastConfigError()['http'] ?? null, 'the administrator is told');
+        self::assertTrue($this->pending($id), 'it waits');
+        self::assertSame('0', $this->field($id, 'comment_approved'));
+        self::assertNull($this->field($id, Meta::ERROR));
+        self::assertNull($this->plugin->log->lastConfigError(), 'not a configuration error');
+        self::assertSame((string)($this->now + Submission::FIRST_BACKOFF_S), $this->field($id, Meta::RETRY_AT));
+        self::assertSame($this->now + Submission::FIRST_BACKOFF_S, $this->plugin->log->sendingPause()['until'] ?? null,
+            'the pause, as after a 503');
+
+        // The retry falls due, and the gateway's 202 names it.
+        $this->now += Submission::FIRST_BACKOFF_S;
+        do_action(Submission::HOOK_RETRY, $id);
+
+        self::assertCount(2, WpStub::$requests);
+        self::assertSame(['wp:' . $id], $this->sentIds());
+        self::assertSame((string)$this->now, $this->field($id, Meta::SUBMITTED_AT), 'accepted by the 202');
+        self::assertNull($this->field($id, Meta::RETRY_AT));
+        self::assertNull($this->plugin->log->sendingPause());
+    }
+
+    public function testA2xxOtherThan202InTheSweepStopsItLikeA503(): void
+    {
+        $this->configure();
+        WpStub::networkFailure();
+        $ids = [];
+        for ($i = 0; $i < 25; $i++) {
+            $ids[] = $this->post('Zaległy komentarz numer ' . $i . '.');
+        }
+        // The pause is over; the receive timeout is far.
+        $this->now += 2 * Submission::FIRST_BACKOFF_S;
+        $requests = count(WpStub::$requests);
+        WpStub::answer(200, ['przyjete' => array_map(static function (int $id): string {
+            return 'wp:' . $id;
+        }, $ids)]);
+
+        do_action(Sweeper::HOOK);
+
+        self::assertCount($requests + 1, WpStub::$requests, 'no second request after the answer that took nothing');
+        foreach ($ids as $id) {
+            self::assertTrue($this->pending($id));
+            self::assertNull($this->field($id, Meta::SUBMITTED_AT));
+        }
+        self::assertNull($this->plugin->log->lastConfigError());
     }
 
     public function testAnEditDuringThePauseWaitsForIt(): void

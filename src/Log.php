@@ -15,7 +15,8 @@ defined('ABSPATH') || exit;
  * message. The log keeps the last
  * {@see MAX_ENTRIES}. A configuration error (a refusal that retrying will not fix) is also
  * kept on its own, for the admin notice, until the gateway accepts a comment again; so is
- * the moment until which the gateway asked to wait (`429`, `408`, `5xx`, no answer), at
+ * the moment until which the gateway asked to wait (`429`, `408`, `5xx`, a `2xx` other
+ * than `202`, no answer), at
  * most a day ahead, which every submission keeps ({@see sendingPause}) and the
  * administrator is shown ({@see pausedUntil}), until that moment passes, a comment is
  * accepted, or the administrator changes the key, the gateway's address or the switch.
@@ -164,8 +165,8 @@ final class Log
     }
 
     /**
-     * Records that the gateway asked to wait until a moment (a `429`, a `408`, a `5xx`, no
-     * answer): nothing is sent before it ({@see sendingPause}), and the administrator is
+     * Records that the gateway asked to wait until a moment (a `429`, a `408`, a `5xx`, a
+     * `2xx` other than `202`, no answer): nothing is sent before it ({@see sendingPause}), and the administrator is
      * shown until when and why ({@see pausedUntil}). The moment is kept at most
      * {@see MAX_PAUSE_S} ahead: while nothing is sent, no `202` can end the pause, so a
      * longer one would stop the plugin for good; when it ends, the next answer says whether

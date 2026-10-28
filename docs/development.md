@@ -51,7 +51,9 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
 3. The answer (shared rule D9.6), for every comment of the request:
    - `202` → a comment whose item id is in `przyjete` is accepted; any other is retried
      after its own backoff, and the others are not held up.
-   - `429` (any code), `408` (as no answer), `5xx` or no answer → the shared pause
+   - `429` (any code), `408` (as no answer), `5xx`, a `2xx` other than `202` (something on
+     the way answered for the gateway, which took nothing; shared rule F5a), even one with
+     every item in `przyjete`, or no answer → the shared pause
      (`Log::pause`, option `minos_moderation_paused`): nothing is sent until the gateway's
      `ponow_za_s` or, without it, a doubling backoff from 60 s (at most an hour, counted
      from the most failed attempts in the request) ends, and never more than a day
@@ -69,9 +71,8 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
      `bledny_identyfikator` or `powtorzony_identyfikator`) → that comment gets the failure
      mode, and the others are sent again at once (the gateway took none of them, and such
      a refusal costs the key nothing).
-   - anything else → a configuration error for every comment of the request: the failure
-     mode, a log entry and an admin notice. That includes a `2xx` other than `202`, even
-     one with every item in `przyjete`: only `202` accepts.
+   - anything else (a `3xx`, a `4xx` other than `408` and `429`) → a configuration error for
+     every comment of the request: the failure mode, a log entry and an admin notice.
 
    While the pause runs, a new or edited comment is not sent in the author's or editor's
    request: it stays held with its retry due when the pause ends, or gets the failure mode

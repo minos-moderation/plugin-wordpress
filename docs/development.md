@@ -98,7 +98,11 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
    accepted. It finds waiting comments by the meta key `_minos_waiting` alone, set while a
    comment waits and removed when it is settled, never by a meta value (`_minos_status`
    stays, and grows with every comment ever assessed), and the due retries by
-   `_minos_retry_at` alone (step 3).
+   `_minos_retry_at` alone (step 3). Each window is the oldest `Sweeper::BATCH` (200), so
+   the timeout is checked in both: under a larger backlog the oldest waiting comments may
+   all be ones the gateway accepted late and still in time, while newer ones it never
+   accepted are past their timeout; those get the failure mode from the retry window, in
+   the same pass.
 
 With `enabled` off the plugin does nothing: no hold, no submission, no retry, no sweep, and
 the webhook answers `404`. Waiting comments stay in WordPress's queue for a person. Only the

@@ -11,6 +11,10 @@ defined('ABSPATH') || exit;
  *
  * - A comment that waited past the receive timeout gets the failure mode: the gateway
  *   gives a delivery up after its TTL, and its worker may have been down for all of it.
+ *   Both windows are looked at: the oldest waiting comments, and the oldest with a retry
+ *   on the way. Under a backlog larger than a window the first may hold only comments the
+ *   gateway accepted late, still in time, while newer ones it never accepted are past
+ *   their timeout; those get it from the second.
  * - The retries that fell due are sent again, in requests of up to
  *   {@see Submission::MAX_ITEMS} comments ({@see Submission::sendDue}): the gateway's limits
  *   count requests, not items. The sweep sends at most {@see MAX_REQUESTS} and stops at the
@@ -121,6 +125,17 @@ final class Sweeper
         // The retries by their own key: comments waiting for a verdict never fill this window.
         $due = [];
         foreach ($this->wp->retryCommentIds(self::BATCH) as $id) {
+            try {
+                // Never accepted and past the receive timeout: the failure mode now, not once
+                // the comments ahead of it in the waiting window are settled.
+                if ($this->wp->meta($id, Meta::STATUS) === Meta::PENDING && $this->submission->pastDeadline($id)) {
+                    $this->outcome->timedOut($id, null);
+                    continue;
+                }
+            } catch (\Throwable $e) {
+                $this->outcome->failed(Log::STEP_TIMEOUT, $id);
+                continue;
+            }
             try {
                 if ($this->submission->due($id)) {
                     $due[] = $id;

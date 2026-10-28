@@ -5,15 +5,21 @@
 #   bin/install-wp-tests.sh <db-name> <db-user> <db-pass> [db-host] [wp-version] [skip-database-creation]
 #
 # The arguments are those of the standard script (`wp scaffold plugin-tests`): db-host may
-# carry a port (`127.0.0.1:3306`), wp-version is a release (`6.0`, `7.1.3`) or `latest`, the
-# newest one. It installs into WP_CORE_DIR (default $TMPDIR/wordpress) and WP_TESTS_DIR
-# (default $TMPDIR/wordpress-tests-lib); tests/Integration/bootstrap.php reads the latter.
+# carry a port (`127.0.0.1:3306`), wp-version is a release (`6.0`, `6.0.0`, `7.1.3`) or
+# `latest`, the newest one. It installs into WP_CORE_DIR (default $TMPDIR/wordpress) and
+# WP_TESTS_DIR (default $TMPDIR/wordpress-tests-lib); tests/Integration/bootstrap.php reads
+# the latter.
 #
 # Unlike the standard script it needs neither Subversion nor wordpress.org, and downloads
-# nothing else (no database drop-in): WordPress is the release tag of its official Git
-# mirror (github.com/WordPress/WordPress, the files of the release zip), the test library
-# (tests/phpunit/includes and data, the sample test config) the same tag of
-# github.com/WordPress/wordpress-develop. The commits it resolved are printed.
+# nothing else (no database drop-in). Everything comes from a release TAG, fetched by its
+# full ref name, never from a branch: WordPress from its official Git mirror
+# (github.com/WordPress/WordPress, the files of the release zip), the test library
+# (tests/phpunit/includes and data, the sample test config) from
+# github.com/WordPress/wordpress-develop. The two name the first release of a branch
+# differently (`6.0` in the mirror, `6.0.0` in wordpress-develop, whose `6.0` is the moving
+# 6.0 branch), so `6.0` and `6.0.0` both mean the release 6.0 here, where the standard
+# script reads `6.0` as the newest test library of the 6.0 branch. A tag missing from
+# either repository is refused. The tags and commits it resolved are printed.
 #
 # The database is created when missing, never dropped: WordPress's test installer drops and
 # recreates its own `wptests_` tables on every run, and every test is rolled back.
@@ -46,7 +52,7 @@ if ! printf '%s' "$db_name" | grep -Eq '^[A-Za-z0-9_]+$'; then
   exit 1
 fi
 
-# A release tag: digits only (`6.0`, `7.1.3`), never a branch or a beta.
+# A release: digits only (`6.0`, `7.1.3`), never a branch or a beta.
 if [ "$wp_version" = 'latest' ]; then
   wp_version="$(git ls-remote --tags --refs "$core_repo" \
     | sed 's|.*refs/tags/||' | grep -E '^[0-9]+\.[0-9]+(\.[0-9]+)?$' | sort -V | tail -n 1)"
@@ -55,6 +61,41 @@ if ! printf '%s' "$wp_version" | grep -Eq '^[0-9]+\.[0-9]+(\.[0-9]+)?$'; then
   echo "not a WordPress release: '$wp_version'" >&2
   exit 1
 fi
+major_minor="$(printf '%s' "$wp_version" | cut -d. -f1-2)"
+patch="$(printf '%s' "$wp_version" | cut -s -d. -f3)"
+patch="${patch:-0}"
+if [ "$patch" -eq 0 ]; then
+  core_tag="$major_minor"
+else
+  core_tag="$major_minor.$patch"
+fi
+develop_tag="$major_minor.$patch"
+for pair in "$core_repo $core_tag" "$develop_repo $develop_tag"; do
+  read -r repo tag <<< "$pair"
+  if ! git ls-remote --exit-code --tags "$repo" "refs/tags/$tag" > /dev/null; then
+    echo "no tag $tag in $repo: not a WordPress release" >&2
+    exit 1
+  fi
+done
+
+# Fetches one tag of a repository, by its full ref name (`clone --branch` would take a
+# branch of the same name first), into a new directory; with paths, only those are checked
+# out, and the rest of the tree is never fetched.
+fetch_tag() {
+  local repo="$1" tag="$2" dir="$3"
+  shift 3
+  git init --quiet "$dir"
+  git -C "$dir" remote add origin "$repo"
+  if [ $# -gt 0 ]; then
+    git -C "$dir" config core.sparseCheckout true
+    printf '%s\n' "$@" > "$dir/.git/info/sparse-checkout"
+    git -C "$dir" fetch --quiet --depth 1 --filter=blob:none origin "refs/tags/$tag"
+  else
+    git -C "$dir" fetch --quiet --depth 1 origin "refs/tags/$tag"
+  fi
+  git -C "$dir" -c advice.detachedHead=false checkout --quiet FETCH_HEAD
+  echo "$repo tag $tag: commit $(git -C "$dir" rev-parse HEAD)"
+}
 
 install_core() {
   if [ -f "$core_dir/wp-settings.php" ]; then
@@ -62,8 +103,7 @@ install_core() {
     return
   fi
   rm -rf "$core_dir"
-  git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$wp_version" "$core_repo" "$core_dir"
-  echo "WordPress $wp_version: $(git -C "$core_dir" rev-parse HEAD) ($core_repo)"
+  fetch_tag "$core_repo" "$core_tag" "$core_dir"
   rm -rf "$core_dir/.git"
 }
 
@@ -74,11 +114,8 @@ install_test_library() {
   fi
   local checkout
   checkout="$(mktemp -d)"
-  # Only the test library's paths are checked out; the rest of the tree is never fetched.
-  git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$wp_version" \
-    --filter=blob:none --sparse "$develop_repo" "$checkout"
-  git -C "$checkout" sparse-checkout set tests/phpunit/includes tests/phpunit/data
-  echo "Test library $wp_version: $(git -C "$checkout" rev-parse HEAD) ($develop_repo)"
+  fetch_tag "$develop_repo" "$develop_tag" "$checkout" \
+    /tests/phpunit/includes/ /tests/phpunit/data/ /wp-tests-config-sample.php
   rm -rf "$tests_dir"
   mkdir -p "$tests_dir"
   cp -R "$checkout/tests/phpunit/includes" "$checkout/tests/phpunit/data" "$tests_dir/"

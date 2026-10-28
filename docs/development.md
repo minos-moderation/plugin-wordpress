@@ -297,9 +297,14 @@ built-in server for the end-to-end test.
   ```
 
   The script takes WordPress from the release tag of its Git mirror
-  (`github.com/WordPress/WordPress`) and the test library from the same tag of
-  `github.com/WordPress/wordpress-develop`, into `WP_CORE_DIR` and `WP_TESTS_DIR` (by
-  default `/tmp/wordpress` and `/tmp/wordpress-tests-lib`; another version needs both
+  (`github.com/WordPress/WordPress`) and the test library from the release's tag of
+  `github.com/WordPress/wordpress-develop`, each fetched by its full tag ref, never a
+  branch: the mirror names the first release of a branch `6.0`, wordpress-develop `6.0.0`
+  (its `6.0` is the moving 6.0 branch), so `6.0` here means the release 6.0 for both,
+  unlike the standard script, which reads it as the 6.0 branch's newest test library. A
+  release missing from either repository is refused, and the resolved tags and commits
+  are printed. It installs into `WP_CORE_DIR` and `WP_TESTS_DIR` (by default
+  `/tmp/wordpress` and `/tmp/wordpress-tests-lib`; another version needs both
   directories removed first). The plain `vendor/bin/phpunit` never needs MySQL.
 - **PHP 7.4**: no `match`, `?->`, attributes, enums, `readonly`, union or `mixed` types,
   promoted constructors, named arguments, trailing commas in parameter lists,

@@ -105,6 +105,8 @@ final class CommentsScreen
         $step = Log::failedStep($error);
         if ($error === Meta::ERROR_NOT_CONFIGURED) {
             echo '<br /><small>' . esc_html__('wtyczka nie miała poprawnego klucza API lub sekretu webhooka — nie wysłano do oceny', 'minos-moderation') . '</small>';
+        } elseif ($error === Meta::ERROR_NO_TEXT) {
+            echo '<br /><small>' . esc_html__('brak tekstu do oceny (np. sam odnośnik albo obrazek bez opisu) — nie wysłano do oceny', 'minos-moderation') . '</small>';
         } elseif ($error === Meta::ERROR_MASKED_WRITE) {
             echo '<br /><small>' . esc_html__('nie udało się zapisać wersji zamaskowanej — komentarz czeka na ręczną moderację', 'minos-moderation') . '</small>';
         } elseif ($step !== null) {
@@ -113,7 +115,10 @@ final class CommentsScreen
             echo '<br /><small>' . esc_html(sprintf(__('błąd: %s', 'minos-moderation'), $error)) . '</small>';
         }
         if ($this->wp->meta($id, Meta::AUTO_PUBLISHED) === '1') {
-            echo '<br /><small>' . esc_html__('opublikowano bez werdyktu (fail-open); spóźniony werdykt zostanie zastosowany', 'minos-moderation') . '</small>';
+            // The gateway never confirmed it took this text: no late verdict is expected.
+            echo '<br /><small>' . ($this->wp->meta($id, Meta::SUBMITTED_AT) === ''
+                ? esc_html__('opublikowano bez oceny (fail-open)', 'minos-moderation')
+                : esc_html__('opublikowano bez werdyktu (fail-open); spóźniony werdykt zostanie zastosowany', 'minos-moderation')) . '</small>';
         }
         $original = $this->wp->meta($id, Meta::ORIGINAL);
         $comment = $this->wp->comment($id);

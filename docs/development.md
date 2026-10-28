@@ -105,6 +105,11 @@ Decisions worth knowing before changing anything:
   taken out, and drops inline tags without a trace: `<blockquote>Zgoda</blockquote>zakazane`
   is sent as two words, `zak<b>a</b>zane` as one. The changed text changes the hash of
   comments in flight during an update; their verdicts then send the next revision instead.
+- **No text to assess is the failure mode** (shared rule D9.5). A comment whose plain text
+  is empty (a link with a blank text, an image without `alt`) is held and gets the failure
+  mode at once, without a request, with `_minos_error` `brak_tekstu_do_oceny` (the plugin's
+  own code, not the gateway's `brak_tekstu`) shown in the "Minos" column; under fail-open
+  the publication is marked as one without an assessment.
 - **The plain text never goes empty by accident.** An empty text gets the failure mode,
   so a regex in `Text` that gives up (a PCRE limit returns null) falls back to its input,
   and trimming is a byte scan over the 26 characters PCRE calls whitespace, not a regex

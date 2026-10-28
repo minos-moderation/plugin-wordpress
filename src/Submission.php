@@ -356,8 +356,10 @@ final class Submission
             return self::REFUSED;
         }
         if ($text === '') {
-            // Nothing to assess: no verdict, no guess.
-            $this->outcome->withoutVerdict($id, null);
+            // Nothing to assess (a link with a blank text, an image without alternative
+            // text): no request, no verdict, no guess - the failure mode at once (shared
+            // rule D9.5), with the reason for the moderator.
+            $this->outcome->withoutVerdict($id, Meta::ERROR_NO_TEXT);
             return self::REFUSED;
         }
         if (Text::isCut($plain)) {

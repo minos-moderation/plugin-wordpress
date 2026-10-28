@@ -8,6 +8,7 @@ use Minos\WordPress\Admin\CommentsScreen;
 use Minos\WordPress\Admin\SettingsPage;
 use Minos\WordPress\Log;
 use Minos\WordPress\Meta;
+use Minos\WordPress\Outcome;
 use Minos\WordPress\Settings;
 use Minos\WordPress\Submission;
 use Minos\WordPress\Text;
@@ -477,14 +478,57 @@ final class SubmissionTest extends PluginTestCase
         self::assertCount(Log::MAX_ENTRIES, $this->plugin->log->entries());
     }
 
-    public function testACommentWithNoTextGetsTheFailureModeWithoutARequest(): void
+    /**
+     * @return array<string,array{0:string,1:string,2:string}> Content, failure mode, `comment_approved`.
+     */
+    public static function nothingToAssess(): array
     {
-        $this->configure(['failure_mode' => Settings::FAIL_CLOSED]);
-        $id = $this->post('<img src="https://obrazek.example/a.png" />');
+        $link = '<a href="https://kasyno.example/bonus">&nbsp;</a>';
+        $image = '<img src="https://obrazek.example/a.png" />';
+        return [
+            'a link with a blank text, fail-closed' => [$link, Settings::FAIL_CLOSED, '0'],
+            'a link with a blank text, fail-open'   => [$link, Settings::FAIL_OPEN, '1'],
+            'an image without alt, fail-closed'     => [$image, Settings::FAIL_CLOSED, '0'],
+        ];
+    }
 
-        self::assertSame([], WpStub::$requests);
+    /**
+     * Audit reproduction R4 the other way round: a link only a robot reads, with no text to
+     * assess, was published under fail-open with nothing to tell it from an assessed one.
+     * Shared rule D9.5: held, the failure mode at once, no request, and the reason shown.
+     *
+     * @dataProvider nothingToAssess
+     */
+    public function testACommentWithNoTextToAssessGetsTheFailureModeAtOnceAndSaysWhy(string $content, string $mode, string $approved): void
+    {
+        $this->configure(['failure_mode' => $mode]);
+        $id = $this->post($content);
+
+        self::assertSame([], WpStub::$requests, 'nothing to assess: no request');
         self::assertSame(Meta::UNASSESSED, $this->field($id, Meta::STATUS));
-        self::assertSame('0', $this->field($id, 'comment_approved'));
+        self::assertSame($approved, $this->field($id, 'comment_approved'));
+        self::assertSame(Meta::ERROR_NO_TEXT, $this->field($id, Meta::ERROR));
+        self::assertNull($this->field($id, Meta::WAITING), 'settled at once');
+        $column = $this->column($id);
+        self::assertStringContainsString('brak tekstu do oceny', $column, 'the moderator sees why');
+        if ($mode === Settings::FAIL_OPEN) {
+            self::assertSame('1', $this->field($id, Meta::AUTO_PUBLISHED), 'marked as the plugin\'s fail-open publication');
+            self::assertStringContainsString('opublikowano bez oceny', $column);
+            self::assertStringNotContainsString('spóźniony werdykt', $column, 'nothing was sent, so no verdict is on its way');
+            return;
+        }
+        self::assertSame([[$id]], array_column(self::events(Outcome::HOOK_NOTIFY), 'args'), 'the moderator is told');
+    }
+
+    /**
+     * @param int $id A comment.
+     * @return string Its "Minos" column, as a moderator sees it.
+     */
+    private function column(int $id): string
+    {
+        ob_start();
+        (new CommentsScreen($this->plugin->wp, $this->plugin->settings, $this->plugin->log))->renderColumn('minos', $id);
+        return (string)ob_get_clean();
     }
 
     /**

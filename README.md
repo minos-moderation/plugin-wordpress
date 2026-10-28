@@ -153,8 +153,10 @@ Zasady, które obowiązują zawsze:
 ## Fail-open i fail-closed
 
 Komentarz nie dostaje werdyktu, gdy brama odpowie „nieocenione”, gdy werdykt nie nadejdzie
-w czasie oczekiwania albo gdy brama odrzuci komentarz z powodu błędu konfiguracji (np. zły
-klucz). Wtedy:
+w czasie oczekiwania, gdy brama odrzuci komentarz z powodu błędu konfiguracji (np. zły
+klucz) albo gdy komentarz nie ma tekstu do oceny (np. sam odnośnik bez treści albo obrazek
+bez opisu — taki komentarz nie jest wysyłany, a kolumna **Minos** podaje powód „brak tekstu
+do oceny”). Wtedy:
 
 - **fail-closed** (domyślnie) — komentarz zostaje do ręcznej moderacji;
 - **fail-open** — komentarz zostaje opublikowany (o ile WordPress sam by go opublikował).

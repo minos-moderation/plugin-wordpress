@@ -191,7 +191,11 @@ vendor/bin/phpunit
 ```
 
 CI (`.github/workflows/tests.yml`) runs `php -l` over the plugin, the suite and the zip
-build on PHP 7.4 and 8.3. The suite needs `ext-curl` and `ext-mbstring` and starts PHP's
+build on PHP 7.4 and 8.3. Every `uses:` in the workflows is pinned to a full commit SHA with
+its version in a trailing comment (`owner/action@<40-hex sha>  # v5.0.0`); to move a pin,
+resolve the new release tag to its commit (`git ls-remote https://github.com/<owner>/<action>
+refs/tags/<tag>^{}` for an annotated tag, the tag itself otherwise), check that the commit
+belongs to that release, and change the SHA and the comment together in every workflow. The suite needs `ext-curl` and `ext-mbstring` and starts PHP's
 built-in server for the end-to-end test.
 
 - **Unit** (`tests/Unit/`): `PluginTestCase` hooks the real `Plugin` into the stubs with a

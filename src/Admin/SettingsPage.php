@@ -312,7 +312,7 @@ final class SettingsPage
     {
         $stats = $this->stats->lastWeek();
         $labels = [
-            'bezpieczne'   => __('Bezpieczne (opublikowane)', 'minos-moderation'),
+            'bezpieczne'   => __('Bezpieczne', 'minos-moderation'),
             'ocenzurowane' => __('Ocenzurowane', 'minos-moderation'),
             'zablokowane'  => __('Zablokowane', 'minos-moderation'),
             Meta::UNASSESSED => __('Nieocenione (tryb „gdy brak werdyktu”)', 'minos-moderation'),
@@ -329,7 +329,7 @@ final class SettingsPage
         if ($stats['p50'] === null || $stats['p95'] === null) {
             self::help(__('Czas od przyjęcia komentarza przez bramę do werdyktu: brak ocenionych komentarzy w tym okresie.', 'minos-moderation'));
         } else {
-            self::help(sprintf(__('Czas od przyjęcia komentarza przez bramę do werdyktu (%1$d ocenionych komentarzy): mediana (P50) %2$s, 95. percentyl (P95) %3$s.', 'minos-moderation'),
+            self::help(sprintf(__('Czas od przyjęcia komentarza przez bramę do werdyktu (ocenionych komentarzy: %1$d): mediana (P50) %2$s, 95. percentyl (P95) %3$s.', 'minos-moderation'),
                 $stats['measured'], self::duration($stats['p50']), self::duration($stats['p95'])));
         }
         if ($stats['limited']) {

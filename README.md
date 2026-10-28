@@ -253,7 +253,9 @@ Jeśli przy jednym komentarzu zawiedzie inna wtyczka (jej kod zgłosi błąd w t
 publikacji, wysyłki albo powiadomienia), Minos zapisuje w dzienniku tylko krok i numer
 komentarza — bez treści błędu, która mogłaby zawierać tekst komentarza — i obsługuje
 pozostałe komentarze dalej. Ten komentarz czeka: krok zostaje powtórzony w następnym
-przebiegu WP-Cron albo przy ponownym doręczeniu werdyktu przez bramę.
+przebiegu WP-Cron albo przy ponownym doręczeniu werdyktu przez bramę. Przy fail-open
+komentarz, który WordPress zdążył opublikować, zostaje opublikowany; dokończenie zapisu
+następuje w kolejnym przebiegu.
 
 ## Wyłączenie i usunięcie
 

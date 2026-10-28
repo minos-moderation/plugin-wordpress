@@ -193,4 +193,79 @@ final class SweeperTest extends PluginTestCase
         self::assertSame('spam', $this->field($id, 'comment_approved'));
         self::assertSame(Meta::UNASSESSED, $this->field($id, Meta::STATUS));
     }
+
+    /**
+     * The reviewer's LOAD probe turned around: a key of 10 requests a minute and a backlog
+     * larger than the sweep's window. The oldest comments were accepted late and still wait
+     * for their verdicts in time; the newer ones were never accepted and are past their
+     * timeout. They get the failure mode in that very pass, not once the older ones settle.
+     */
+    public function testARetryPastItsTimeoutBeyondTheWaitingWindowGetsTheFailureModeInTheSamePass(): void
+    {
+        $this->configure(['timeout_min' => 20, 'failure_mode' => Settings::FAIL_CLOSED]);
+        $down = true;
+        $perMinute = [];
+        add_filter('pre_http_request', function ($pre, $args) use (&$down, &$perMinute) {
+            WpStub::$requests[] = ['url' => '', 'args' => $args];
+            if ($down) {
+                return new \WP_Error('http_request_failed', 'cURL error 7: connection refused');
+            }
+            $minute = intdiv($this->now, 60);
+            $perMinute[$minute] = ($perMinute[$minute] ?? 0) + 1;
+            if ($perMinute[$minute] > 10) {
+                return ['response' => ['code' => 429], 'body' => (string)json_encode(['blad' => [
+                    'kod' => 'limit_minutowy_klucza', 'ponow_za_s' => 60 - $this->now % 60]])];
+            }
+            return WpStub::accepted($args);
+        }, 10, 2);
+        $start = $this->now;
+        $ids = [];
+        for ($i = 0; $i < Sweeper::BATCH + 10; $i++) {
+            $ids[] = $this->post('Komentarz z zaległości numer ' . $i . '.');
+        }
+        $down = false;
+
+        // Two sweeps take the oldest 200, five requests of 20 each time.
+        foreach ([10, 15] as $minutes) {
+            $this->now = $start + $minutes * 60;
+            do_action(Sweeper::HOOK);
+        }
+        $old = array_slice($ids, 0, Sweeper::BATCH);
+        $new = array_slice($ids, Sweeper::BATCH);
+        foreach ($old as $id) {
+            self::assertNotNull($this->field($id, Meta::SUBMITTED_AT), 'accepted late, in time');
+        }
+        foreach ($new as $id) {
+            self::assertNotNull($this->field($id, Meta::RETRY_AT), 'never accepted');
+        }
+        self::assertSame($old, $this->plugin->wp->pendingCommentIds(Sweeper::BATCH), 'the waiting window holds only the old ones');
+        $requests = count(WpStub::$requests);
+
+        $this->now = $start + 20 * 60;
+        do_action(Sweeper::HOOK);
+
+        foreach ($new as $id) {
+            self::assertSame([Meta::UNASSESSED, '1', '0'],
+                [$this->field($id, Meta::STATUS), $this->field($id, Meta::TIMED_OUT), $this->field($id, 'comment_approved')]);
+            self::assertNull($this->field($id, Meta::RETRY_AT));
+        }
+        foreach ($old as $id) {
+            self::assertTrue($this->pending($id), 'their timeout counts from their acceptance');
+        }
+        self::assertCount($requests, WpStub::$requests, 'nothing sent for a comment past its timeout');
+    }
+
+    public function testAStaleRetryMarkOnAnAssessedCommentChangesNothing(): void
+    {
+        $this->configure(['timeout_min' => 20]);
+        $id = $this->post('Komentarz oceniony, ze starym znacznikiem ponowienia.');
+        $this->deliver(self::verdict($id, 'bezpieczne'));
+        WpStub::$meta[$id][Meta::RETRY_AT] = (string)$this->now;
+
+        $this->now += 3600;
+        do_action(Sweeper::HOOK);
+
+        self::assertSame(['bezpieczne', '1'], [$this->field($id, Meta::STATUS), $this->field($id, 'comment_approved')]);
+        self::assertNull($this->field($id, Meta::TIMED_OUT));
+    }
 }

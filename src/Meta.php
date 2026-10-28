@@ -131,9 +131,9 @@ final class Meta
     public const ERROR_NOT_CONFIGURED = 'brak_konfiguracji';
 
     /**
-     * {@see ERROR} when the comment has no text to assess (only a link, an image without
-     * alternative text, formatting around nothing): nothing was sent, and the failure mode
-     * applied at once (shared rule D9.5). The plugin's own code, not the gateway's
+     * {@see ERROR} when the comment has no text to assess (only a link, only an image with
+     * or without its alternative text, formatting around nothing): nothing was sent, and the
+     * failure mode applied at once (shared rules D9.5, F7). The plugin's own code, not the gateway's
      * `brak_tekstu`, which answers a request that carried an empty item.
      */
     public const ERROR_NO_TEXT = 'brak_tekstu_do_oceny';

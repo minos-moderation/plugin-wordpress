@@ -106,7 +106,7 @@ final class CommentsScreen
         if ($error === Meta::ERROR_NOT_CONFIGURED) {
             echo '<br /><small>' . esc_html__('wtyczka nie miała poprawnego klucza API lub sekretu webhooka — nie wysłano do oceny', 'minos-moderation') . '</small>';
         } elseif ($error === Meta::ERROR_NO_TEXT) {
-            echo '<br /><small>' . esc_html__('brak tekstu do oceny (np. sam odnośnik albo obrazek bez opisu) — nie wysłano do oceny', 'minos-moderation') . '</small>';
+            echo '<br /><small>' . esc_html__('brak tekstu do oceny (np. sam odnośnik albo sam obrazek, także z opisem) — nie wysłano do oceny', 'minos-moderation') . '</small>';
         } elseif ($error === Meta::ERROR_MASKED_WRITE) {
             echo '<br /><small>' . esc_html__('nie udało się zapisać wersji zamaskowanej — komentarz czeka na ręczną moderację', 'minos-moderation') . '</small>';
         } elseif ($step !== null) {

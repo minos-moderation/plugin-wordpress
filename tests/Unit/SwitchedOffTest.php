@@ -81,10 +81,17 @@ final class SwitchedOffTest extends PluginTestCase
             self::assertSame('1', $this->field($id, Meta::REVISION), 'sent again as its next revision');
             self::assertSame((string)$this->now, $this->field($id, Meta::HELD_AT), 'with a fresh timeout');
         }
-        $due = array_values(array_filter(self::events(Submission::HOOK_RETRY), function (array $event): bool {
-            return $event['at'] === $this->now;
-        }));
-        self::assertSame([[$accepted], [$retrying]], array_column($due, 'args'));
+        // Due at WP-Cron's next run: a retry event of its own now, or the one still left from
+        // before (WordPress refuses a second event for the same comment within ten minutes).
+        $due = [];
+        foreach (self::events(Submission::HOOK_RETRY) as $event) {
+            if ($event['at'] <= $this->now) {
+                $due[] = $event['args'];
+            }
+        }
+        foreach ([$accepted, $retrying] as $id) {
+            self::assertContains([$id], $due);
+        }
         self::assertCount($requests, WpStub::$requests, 'from WP-Cron, not in the administrator\'s request');
         self::assertSame(Meta::UNASSESSED, $this->field($decided, Meta::STATUS), 'a person\'s decision is left alone');
         self::assertSame('1', $this->field($decided, 'comment_approved'));

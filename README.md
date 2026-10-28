@@ -163,18 +163,21 @@ Zasady, które obowiązują zawsze:
 
 Komentarz nie dostaje werdyktu, gdy brama odpowie „nieocenione”, gdy werdykt nie nadejdzie
 w czasie oczekiwania, gdy brama odrzuci komentarz z powodu błędu konfiguracji (np. zły
-klucz) albo gdy komentarz nie ma tekstu do oceny (np. sam odnośnik bez treści albo obrazek
-bez opisu — taki komentarz nie jest wysyłany, a kolumna **Minos** podaje powód „brak tekstu
-do oceny”). Wtedy:
+klucz) albo gdy komentarz nie ma tekstu do oceny (np. sam odnośnik bez treści albo sam
+obrazek — także z opisem `alt` lub `title`, bo brama nie ocenia obrazów, a werdykt o samym
+opisie dotyczyłby czegoś, czego nie widziała; niewidoczne znaki, np. spacja o zerowej
+szerokości, nie są tekstem; taki komentarz nie jest wysyłany, a kolumna
+**Minos** podaje powód „brak tekstu do oceny”). Wtedy:
 
 - **fail-closed** (domyślnie) — komentarz zostaje do ręcznej moderacji;
 - **fail-open** — komentarz zostaje opublikowany (o ile WordPress sam by go opublikował).
 
 **Ponawianie.** Gdy brama każe poczekać — odmowa HTTP 429 (limit minutowy, dzienny lub
 „w toku” klucza, wspólny limit usługi, pełna kolejka), błąd HTTP 5xx, przekroczenie czasu
-(HTTP 408) albo brak odpowiedzi — wtyczka wstrzymuje **wszystkie** wysyłki do chwili
-wskazanej przez bramę, a bez niej na rosnącą przerwę (1, 2, 4… minuty, najwyżej godzina);
-przerwa trwa najwyżej dobę, a potem wtyczka pyta bramę znowu. Zmiana klucza API, sekretu
+(HTTP 408) albo brak odpowiedzi — a także po odpowiedzi 2xx innej niż 202 (za przyjęcie
+komentarza wtyczka uznaje tylko odpowiedź 202 bramy; inną odpowiedź 2xx dał ktoś po drodze),
+wtyczka wstrzymuje **wszystkie** wysyłki do chwili wskazanej przez bramę, a bez niej na
+rosnącą przerwę (1, 2, 4… minuty, najwyżej godzina); przerwa trwa najwyżej dobę, a potem wtyczka pyta bramę znowu. Zmiana klucza API, sekretu
 webhooka, adresu bramy albo wyłączenie lub włączenie moderacji kończy przerwę od razu. Limity bramy liczą zapytania, nie
 komentarze, a każda odmowa spowodowana przez klucz zużywa jego limit, więc w czasie przerwy
 nowy komentarz nie jest wysyłany przy dodaniu: czeka wstrzymany, a po przerwie WP-Cron
@@ -182,8 +185,7 @@ wysyła zaległe komentarze razem, do 20 w jednym zapytaniu. Komentarz, którego
 wymieni w odpowiedzi jako przyjętego, jest ponawiany osobno; komentarz, który brama odrzuci
 jako wadliwy, trafia do trybu „Gdy brak werdyktu”, a pozostałe z tego zapytania są
 wysyłane ponownie od razu. Inne odmowy (np. zły klucz, brak webhooka, niedozwolony profil)
-i odpowiedź 2xx inna niż 202 (przyjęcie oznacza tylko 202) nie są ponawiane: to błąd
-konfiguracji (patrz niżej). Ponowienia trwają do upływu czasu
+nie są ponawiane: to błąd konfiguracji (patrz niżej). Ponowienia trwają do upływu czasu
 oczekiwania. Jeśli brama zapowiada, że nie przyjmie komentarzy aż do chwili po upływie
 czasu oczekiwania (np. przy wyczerpanym dziennym limicie zapytań klucza), komentarz od
 razu trafia do trybu „Gdy brak werdyktu” — bez 20 minut czekania; dotyczy to także
@@ -209,7 +211,7 @@ Wysyłane są wyłącznie:
 - identyfikator komentarza w postaci `wp:<numer>` (sam numer, bez treści), a dla tekstu
   zmienionego przed oceną `wp:<numer>.<wersja>`;
 - tekst komentarza bez znaczników HTML, razem z tekstem atrybutów `title` i `alt`
-  (czytelnik też go widzi), z granicami akapitów, cytatów, list i nagłówków jako nowymi
+  (czytelnik też go widzi; sam opis obrazka bez innego tekstu nie jest wysyłany), z granicami akapitów, cytatów, list i nagłówków jako nowymi
   wierszami (tak jak widzi je czytelnik) — **pierwsze 3000 znaków**: dłuższy komentarz jest oceniany na
   podstawie pierwszych 3000 znaków, a dalsza część nie jest oceniana (patrz „Jak to
   działa”);
@@ -306,3 +308,7 @@ następuje w kolejnym przebiegu.
 ## Dla programistów
 
 Budowanie, testy i praca z atrapą bramy: [`docs/development.md`](docs/development.md).
+Każda zmiana wtyczki przechodzi testy na prawdziwym WordPressie 6.0 (PHP 7.4) i najnowszym
+(PHP 8.3) — zadanie „WordPress integration” w
+[`.github/workflows/tests.yml`](.github/workflows/tests.yml) — z atrapą bramy w miejscu
+usługi Minos.

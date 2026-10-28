@@ -26,6 +26,7 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
 | `tests/stubs/wordpress.php` | Hand-written stubs of the WordPress functions the plugin calls. |
 | `tests/Unit/` | The real handlers on the stubs. |
 | `tests/EndToEnd/` | The plugin against the mock gateway over real HTTP. |
+| `tests/Integration/` | The plugin on a real WordPress and its test library (`phpunit-integration.xml.dist`, installed by `bin/install-wp-tests.sh`), against the mock gateway. |
 | `tests/Repo/` | The Claude Code rules (their checker also runs on `fixtures/agents/`, agents it must reject) and the PHP 7.4 syntax guard. |
 | `bin/build-zip.sh` | Builds `build/minos-moderation.zip` with `vendor/` inside. |
 | `.github/workflows/release.yml` | On a `v*` tag: builds the zip, proves it with `.github/scripts/check-release-archive.sh` and attaches it to the GitHub Release. |
@@ -50,12 +51,16 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
 3. The answer (shared rule D9.6), for every comment of the request:
    - `202` → a comment whose item id is in `przyjete` is accepted; any other is retried
      after its own backoff, and the others are not held up.
-   - `429` (any code), `408` (as no answer), `5xx` or no answer → the shared pause
+   - `429` (any code), `408` (as no answer), `5xx`, a `2xx` other than `202` (something on
+     the way answered for the gateway, which took nothing; shared rule F5a), even one with
+     every item in `przyjete`, or no answer → the shared pause
      (`Log::pause`, option `minos_moderation_paused`): nothing is sent until the gateway's
      `ponow_za_s` or, without it, a doubling backoff from 60 s (at most an hour, counted
      from the most failed attempts in the request) ends, and never more than a day
      (`Log::MAX_PAUSE_S`): while nothing is sent no `202` can end it. Each comment of the
-     request is retried then (a one-off WP-Cron event, plus the sweep as a fallback), but
+     request is retried then (a one-off WP-Cron event, plus the sweep as a fallback:
+     WordPress refuses a second event for the same comment within ten minutes of one it
+     still holds, so a retry moved later than its event is sent by the sweep), but
      gets the failure mode at once when `ponow_za_s` as given (clamped at a year only to
      stay an integer) ends at or after its receive timeout (shared rule D9.3(a)). A pause
      running longer is never shortened by the answer to an earlier request; it ends with
@@ -66,9 +71,8 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
      `bledny_identyfikator` or `powtorzony_identyfikator`) → that comment gets the failure
      mode, and the others are sent again at once (the gateway took none of them, and such
      a refusal costs the key nothing).
-   - anything else → a configuration error for every comment of the request: the failure
-     mode, a log entry and an admin notice. That includes a `2xx` other than `202`, even
-     one with every item in `przyjete`: only `202` accepts.
+   - anything else (a `3xx`, a `4xx` other than `408` and `429`) → a configuration error for
+     every comment of the request: the failure mode, a log entry and an admin notice.
 
    While the pause runs, a new or edited comment is not sent in the author's or editor's
    request: it stays held with its retry due when the pause ends, or gets the failure mode
@@ -94,7 +98,11 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
    accepted. It finds waiting comments by the meta key `_minos_waiting` alone, set while a
    comment waits and removed when it is settled, never by a meta value (`_minos_status`
    stays, and grows with every comment ever assessed), and the due retries by
-   `_minos_retry_at` alone (step 3).
+   `_minos_retry_at` alone (step 3). Each window is the oldest `Sweeper::BATCH` (200), so
+   the timeout is checked in both: under a larger backlog the oldest waiting comments may
+   all be ones the gateway accepted late and still in time, while newer ones it never
+   accepted are past their timeout; those get the failure mode from the retry window, in
+   the same pass.
 
 With `enabled` off the plugin does nothing: no hold, no submission, no retry, no sweep, and
 the webhook answers `404`. Waiting comments stay in WordPress's queue for a person. Only the
@@ -134,8 +142,14 @@ Decisions worth knowing before changing anything:
   taken out, and drops inline tags without a trace: `<blockquote>Zgoda</blockquote>zakazane`
   is sent as two words, `zak<b>a</b>zane` as one. The changed text changes the hash of
   comments in flight during an update; their verdicts then send the next revision instead.
-- **No text to assess is the failure mode** (shared rule D9.5). A comment whose plain text
-  is empty (a link with a blank text, an image without `alt`) is held and gets the failure
+- **No text to assess is the failure mode** (shared rules D9.5, F7). A comment whose plain
+  text is empty (a link with a blank text, an image without `alt`), or whose own text is
+  (`Text::ownText`: no text but that of `title` and `alt` attributes, as an image with its
+  `alt` or a blank link with a `title`; the gateway assesses no image, and a verdict on its
+  `alt` would stand for the image), or holds nothing a reader sees (`Text::hasOwnText`:
+  whitespace, separators, format characters such as a zero-width space, a soft hyphen, a
+  word joiner or a byte order mark, controls, the blank fillers; when that check cannot
+  run, the comment is sent), is held and gets the failure
   mode at once, without a request, with `_minos_error` `brak_tekstu_do_oceny` (the plugin's
   own code, not the gateway's `brak_tekstu`) shown in the "Minos" column; under fail-open
   the publication is marked as one without an assessment.
@@ -201,7 +215,8 @@ Decisions worth knowing before changing anything:
 
 Checked against the WordPress sources at the `6.0` and `7.1.2` tags
 (`github.com/WordPress/WordPress`; `developer.wordpress.org` was not reachable from the
-build environment): `pre_comment_approved` (in `wp_allow_comment` / `wp_check_comment_data`,
+build environment), and run on a real WordPress 6.0 and the latest by the integration suite
+(see Tests): `pre_comment_approved` (in `wp_allow_comment` / `wp_check_comment_data`,
 `$commentdata` as the second argument), `comment_post` (`$comment_id, $comment_approved,
 $commentdata`), `rest_insert_comment` (`$comment, $request, $creating`), the REST server
 setting the request body from `php://input`, `WP_REST_Request::get_body()` and
@@ -237,7 +252,8 @@ vendor/bin/phpunit
 ```
 
 CI (`.github/workflows/tests.yml`) runs `php -l` over the plugin, the suite and the zip
-build on PHP 7.4 and 8.3. Every `uses:` in the workflows is pinned to a full commit SHA with
+build on PHP 7.4 and 8.3, and the integration suite in its own job, "WordPress
+integration", on WordPress 6.0 with PHP 7.4 and the latest WordPress with PHP 8.3. Every `uses:` in the workflows is pinned to a full commit SHA with
 its version in a trailing comment (`owner/action@<40-hex sha>  # v5.0.0`); to move a pin,
 resolve the new release tag to its commit (`git ls-remote https://github.com/<owner>/<action>
 refs/tags/<tag>^{}` for an annotated tag, the tag itself otherwise), check that the commit
@@ -245,8 +261,8 @@ belongs to that release, and change the SHA and the comment together in every wo
 built-in server for the end-to-end test.
 
 - **Unit** (`tests/Unit/`): `PluginTestCase` hooks the real `Plugin` into the stubs with a
-  fixed clock. `WpStub::postComment()` runs the filter, the insert and `comment_post` as
-  `wp_new_comment` does; `deliver()` signs a payload with `Signature::sign` and calls the
+  fixed clock. `WpStub::postComment()` runs the filter (twice, as WordPress 6.7+), the
+  content filters, the insert and `comment_post` as `wp_new_comment` does; `deliver()` signs a payload with `Signature::sign` and calls the
   real receiver; `WpStub::answer()` queues the gateway's answers (by default a `202`
   naming every item of the request in `przyjete`); every HTTP request,
   status change, cron event and e-mail is recorded in `WpStub`.
@@ -256,7 +272,45 @@ built-in server for the end-to-end test.
   the plugin's hooks with `wp_remote_post` sending for real, the mock's worker delivering.
   Servers start through array-form `proc_open`, and `tearDown` asserts every port closed.
 - **Stubs**: a new WordPress call goes through `Platform` and gets a stub that keeps
-  WordPress's observable behaviour (slashing, status words, header names).
+  WordPress's observable behaviour (slashing, status words, header names), and a test in
+  `tests/Integration/` that runs it on the real WordPress. What the real WordPress showed
+  the stubs got wrong is fixed there: `pre_comment_approved` runs twice from 6.7 on (once
+  before 6.7), `wp_schedule_single_event` refuses an event with the same action and
+  arguments within ten minutes of one it holds, `wp_update_comment` answers `0` when the
+  comment already read so. kses is not stubbed: a test posts content as WordPress would
+  store it.
+- **Integration** (`tests/Integration/`, `phpunit-integration.xml.dist`): the plugin on a
+  real WordPress, loaded by its main file, with WordPress's own PHPUnit test library
+  (`WP_UnitTestCase`, `yoast/phpunit-polyfills`) and a MySQL database whose changes each
+  test rolls back. Comments come in through the comment form's handler
+  (`wp_handle_comment_submission`) or the REST API, verdicts through WordPress's own REST
+  server: the mock gateway's worker delivers to a capture server
+  (`fixtures/capture.php`), and the test serves each delivery byte for byte where its
+  database transaction is. The plugin's clock is the real one, so a test that needs time
+  to pass moves the moments the plugin stored back. One test at least for each of: the
+  double `pre_comment_approved`, kses and the stored `comment_content` with the column's
+  limit, `wp_set_comment_status` / `wp_update_comment` / `transition_comment_status` and
+  the e-mails sent in the webhook's request, the REST route with the raw body, WP-Cron's
+  duplicate refusal, `get_comments` with meta and date queries, and uninstalling. To run
+  it, with a MySQL server and a user that may create the database:
+
+  ```bash
+  bin/install-wp-tests.sh wordpress_test <db-user> <db-password> 127.0.0.1:3306 6.0   # or: latest
+  vendor/bin/phpunit -c phpunit-integration.xml.dist
+  ```
+
+  The script takes WordPress from the release tag of its Git mirror
+  (`github.com/WordPress/WordPress`) and the test library from the release's tag of
+  `github.com/WordPress/wordpress-develop`, each fetched by its full tag ref, never a
+  branch: the mirror names the first release of a branch `6.0`, wordpress-develop `6.0.0`
+  (its `6.0` is the moving 6.0 branch), so `6.0` here means the release 6.0 for both,
+  unlike the standard script, which reads it as the 6.0 branch's newest test library. A
+  release missing from either repository is refused, and the resolved tags and commits
+  are printed. It installs into `WP_CORE_DIR` and `WP_TESTS_DIR` (by default
+  `/tmp/wordpress` and `/tmp/wordpress-tests-lib`), each missing or empty: it removes no
+  directory but its own staging ones, refuses one it did not install that holds anything,
+  and reuses its own only for the same release and test configuration (another release
+  or database needs both directories removed first). The plain `vendor/bin/phpunit` never needs MySQL.
 - **PHP 7.4**: no `match`, `?->`, attributes, enums, `readonly`, union or `mixed` types,
   promoted constructors, named arguments, trailing commas in parameter lists,
   non-capturing `catch`, `str_contains` / `str_starts_with` / `str_ends_with`.

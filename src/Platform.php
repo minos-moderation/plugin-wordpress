@@ -13,7 +13,8 @@ defined('ABSPATH') || exit;
  * goes through here, so the list of platform touch points is this file, and the tests run
  * the real logic against hand-written stubs of these functions (`tests/stubs/`). The hook
  * wiring (`Plugin`) and the admin screens (`Admin\`) are WordPress glue and call it
- * directly. Every function used here was checked against the WordPress 6.0 and 7.1 sources.
+ * directly. Every function used here was checked against the WordPress 6.0 and 7.1 sources,
+ * and runs on a real WordPress 6.0 and the latest in the integration suite (`tests/Integration/`).
  */
 class Platform
 {
@@ -418,7 +419,9 @@ class Platform
     }
 
     /**
-     * Schedules a one-off WP-Cron event.
+     * Schedules a one-off WP-Cron event. WordPress refuses it while it holds an event with
+     * the same action and arguments due within ten minutes of it, and keeps that one: the
+     * sweep sends a retry its event ran too early for.
      *
      * @param int               $at   Unix seconds.
      * @param string            $hook The action.

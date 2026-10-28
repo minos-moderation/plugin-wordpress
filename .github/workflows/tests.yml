@@ -58,3 +58,50 @@ jobs:
           version="$(sed -n 's/^ \* Version:[[:space:]]*//p' minos-moderation.php)"
           archive="$(bash bin/build-zip.sh | tail -n 1)"
           bash .github/scripts/check-release-archive.sh "$archive" "v$version"
+
+  # The plugin on a real WordPress (tests/Integration, phpunit-integration.xml.dist): the
+  # oldest version the plugin promises on the oldest PHP, the newest on a current one. The
+  # gateway is the client library's mock; nothing goes to a real gateway.
+  integration:
+    name: WordPress integration (WordPress ${{ matrix.wordpress }}, PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - wordpress: '6.0'
+            php: '7.4'
+          - wordpress: latest
+            php: '8.3'
+    services:
+      mysql:
+        # Pinned to the image digest, with its version in the tag.
+        image: mysql:8.0.46@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --host=127.0.0.1 --password=root"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+        with:
+          persist-credentials: false
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240  # 2.37.2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: curl, json, mbstring, mysqli
+          coverage: none
+      - run: composer install --no-interaction --no-progress --prefer-dist
+      - name: Let PHP 7.4's client log in to MySQL 8.0
+        run: mysql --host=127.0.0.1 --port=3306 --protocol=tcp --user=root --password=root
+          --execute="ALTER USER 'root'@'%' IDENTIFIED WITH mysql_native_password BY 'root'"
+      - name: Install WordPress and its test library
+        env:
+          WORDPRESS: ${{ matrix.wordpress }}
+        run: bin/install-wp-tests.sh wordpress_test root root 127.0.0.1:3306 "$WORDPRESS"
+      - run: vendor/bin/phpunit -c phpunit-integration.xml.dist

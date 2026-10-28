@@ -10,6 +10,11 @@
  * `WpStub`, so a test asserts on what the plugin did. `wp_remote_post` answers from a
  * queue, or sends for real in end-to-end tests.
  *
+ * The integration suite (tests/Integration) runs the same plugin on a real WordPress 6.0
+ * and the latest one; what it showed these stubs got wrong is fixed here, marked "As core".
+ * Not stubbed: kses. A visitor's comment reaches the plugin as kses left it (tags outside
+ * the allowed list removed, a bare `&` encoded); a test posts its content as stored.
+ *
  * Global namespace, no PHP 8 syntax: CI runs the suite on PHP 7.4.
  */
 
@@ -94,6 +99,12 @@ final class WpStub
     public static $registeredSettings = [];
 
     /**
+     * @var callable():int The site's current time, which WP-Cron measures its duplicate window
+     *     from (`time()` in core); unit tests give it their fixed clock.
+     */
+    public static $clock = 'time';
+
+    /**
      * Forgets everything.
      *
      * @return void
@@ -122,6 +133,7 @@ final class WpStub
         self::$lifecycle = [];
         self::$fields = [];
         self::$registeredSettings = [];
+        self::$clock = 'time';
     }
 
     /**
@@ -153,8 +165,10 @@ final class WpStub
     }
 
     /**
-     * Posts a comment the way `wp_new_comment` does: `pre_comment_approved` on WordPress's
-     * own decision, the insert, then `comment_post`.
+     * Posts a comment the way `wp_new_comment` does in WordPress 6.7 and later:
+     * `pre_comment_approved` on WordPress's own decision, the content filters
+     * (`wp_filter_comment`), the filter again on WordPress's own decision unless the first
+     * run said spam or trash (6.0 to 6.6 run it once), the insert, then `comment_post`.
      *
      * @param array<string,mixed> $data     The comment's fields.
      * @param int|string          $decision What WordPress's own rules decided.
@@ -164,6 +178,10 @@ final class WpStub
     {
         $data += ['comment_type' => 'comment', 'user_id' => 0];
         $approved = apply_filters('pre_comment_approved', $decision, $data);
+        $data['comment_content'] = apply_filters('pre_comment_content', (string)($data['comment_content'] ?? ''));
+        if (!in_array($approved, ['spam', 'trash'], true)) {
+            $approved = apply_filters('pre_comment_approved', $decision, $data);
+        }
         $id = self::insertComment(['comment_approved' => (string)$approved] + $data);
         do_action('comment_post', $id, $approved, $data);
         return $id;
@@ -506,8 +524,9 @@ function wp_set_comment_status($id, $status, $wpError = false)
 /**
  * As core: the content filters run on the way in (`pre_comment_content` on slashed data,
  * `comment_save_pre` on unslashed), `wp_update_comment_data` may refuse with a `WP_Error`,
- * wpdb refuses a `comment_content` over the `text` column's 65,535 bytes, and a done
- * update fires `edit_comment`.
+ * wpdb refuses a `comment_content` over the `text` column's 65,535 bytes (false, or the
+ * error `db_update_error`), and a done update fires `edit_comment` and answers the rows
+ * it changed: `1`, or `0` when the comment already read so.
  */
 function wp_update_comment($commentarr, $wpError = false)
 {
@@ -534,7 +553,7 @@ function wp_update_comment($commentarr, $wpError = false)
     if (WpStub::$comments[$id]['comment_approved'] !== $old['comment_approved']) {
         wpstub_transition_comment_status(WpStub::$comments[$id]['comment_approved'], $old['comment_approved'], $id);
     }
-    return 1;
+    return WpStub::$comments[$id] === $old ? 0 : 1;
 }
 
 /** Core's `wp_transition_comment_status`, as far as `transition_comment_status` goes. */
@@ -645,15 +664,30 @@ function is_wp_error($thing)
 
 // --- WP-Cron -------------------------------------------------------------------------
 
-/** As core: the `schedule_event` filter sees the event first and may drop it (or throw). */
+/**
+ * As core: an event is refused when one with the same action and arguments is due within
+ * ten minutes of it (for an event due within ten minutes from now, or past, the window
+ * reaches from any earlier one to ten minutes from now); then the `schedule_event` filter
+ * sees it and may drop it (or throw).
+ */
 function wp_schedule_single_event($timestamp, $hook, $args = [], $wpError = false)
 {
-    $event = apply_filters('schedule_event', (object)['hook' => $hook, 'timestamp' => (int)$timestamp,
+    $timestamp = (int)$timestamp;
+    $now = (int)call_user_func(WpStub::$clock);
+    $min = $timestamp < $now + 600 ? 0 : $timestamp - 600;
+    $max = $timestamp < $now ? $now + 600 : $timestamp + 600;
+    foreach (WpStub::$events as $existing) {
+        if ($existing['hook'] === $hook && $existing['args'] === $args
+            && $existing['at'] >= $min && $existing['at'] <= $max) {
+            return $wpError ? new WP_Error('duplicate_event', 'A duplicate event already exists.') : false;
+        }
+    }
+    $event = apply_filters('schedule_event', (object)['hook' => $hook, 'timestamp' => $timestamp,
         'schedule' => false, 'args' => $args]);
     if (!$event) {
         return false;
     }
-    WpStub::$events[] = ['at' => (int)$timestamp, 'hook' => $hook, 'args' => $args, 'recurrence' => null];
+    WpStub::$events[] = ['at' => $timestamp, 'hook' => $hook, 'args' => $args, 'recurrence' => null];
     return true;
 }
 

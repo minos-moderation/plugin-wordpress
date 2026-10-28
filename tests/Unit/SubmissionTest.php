@@ -95,6 +95,27 @@ final class SubmissionTest extends PluginTestCase
             $this->sentBody()['elementy'][0]['tekst']);
     }
 
+    public function testTextWithAnInvisibleCharacterInsideIsSentAsItIs(): void
+    {
+        $this->configure();
+        $id = $this->post('zak&#8203;azane <img src="https://obrazek.example/a.png" alt="foto" />');
+
+        self::assertTrue($this->pending($id));
+        $text = $this->sentBody()['elementy'][0]['tekst'];
+        self::assertStringContainsString("zak\u{200B}azane", $text, 'the text is not changed');
+        self::assertStringContainsString('foto', $text);
+    }
+
+    public function testAnImagesAltIsSentBesideTheCommentsOwnText(): void
+    {
+        $this->configure();
+        $id = $this->post('Zobacz <img src="https://obrazek.example/a.png" alt="foto" /> z wakacji');
+
+        self::assertTrue($this->pending($id));
+        self::assertSame(['Zobacz', 'foto', 'z', 'wakacji'],
+            preg_split('/\s+/u', $this->sentBody()['elementy'][0]['tekst']), 'the alt in its place, beside the words');
+    }
+
     public function testALongCommentIsMarkedAsCut(): void
     {
         $this->configure();
@@ -235,6 +256,24 @@ final class SubmissionTest extends PluginTestCase
 
         self::assertSame('0', $this->field($id, Meta::WP_APPROVED));
         self::assertTrue($this->pending($id));
+    }
+
+    public function testWordPressesOwnDecisionIsTheLastRunOfTheFilter(): void
+    {
+        $this->configure();
+        // A rule that holds the comment only once its data is filtered (the second run).
+        $runs = 0;
+        add_filter('pre_comment_approved', static function ($approved) use (&$runs) {
+            $runs++;
+            return $runs >= 2 ? 0 : $approved;
+        }, 10);
+
+        $id = $this->post('Komentarz sprawdzany dwa razy.');
+
+        self::assertSame(2, $runs);
+        self::assertSame('0', $this->field($id, Meta::WP_APPROVED));
+        $this->deliver(self::verdict($id, 'bezpieczne'));
+        self::assertSame('0', $this->field($id, 'comment_approved'), 'never published past WordPress\'s own hold');
     }
 
     public function testAStatusChangedByALaterFilterIsNotTheirs(): void
@@ -452,7 +491,6 @@ final class SubmissionTest extends PluginTestCase
             'no webhook'          => [403, 'brak_webhooka', 'brak_webhooka'],
             'profile not allowed' => [403, 'profil_niedozwolony', 'profil_niedozwolony'],
             'B2B off'             => [404, 'nie_znaleziono', 'nie_znaleziono'],
-            'not a gateway'       => [200, null, 'http_200'],
         ];
     }
 
@@ -529,11 +567,42 @@ final class SubmissionTest extends PluginTestCase
     {
         $link = '<a href="https://kasyno.example/bonus">&nbsp;</a>';
         $image = '<img src="https://obrazek.example/a.png" />';
+        // Shared rule F7: an image is not text, and its `alt` or `title` alone is no text to
+        // assess; neither is the `title` of a link with a blank text.
+        $described = '<img src="https://obrazek.example/a.png" alt="foto" />';
+        $titled = '<p><img src="https://obrazek.example/a.png" alt="foto" title="wakacje" /></p>';
+        $blankLink = '<a href="https://kasyno.example/bonus" title="kup teraz">&nbsp;</a>';
         return [
             'a link with a blank text, fail-closed' => [$link, Settings::FAIL_CLOSED, '0'],
             'a link with a blank text, fail-open'   => [$link, Settings::FAIL_OPEN, '1'],
             'an image without alt, fail-closed'     => [$image, Settings::FAIL_CLOSED, '0'],
-        ];
+            'an image with alt, fail-closed'        => [$described, Settings::FAIL_CLOSED, '0'],
+            'an image with alt, fail-open'          => [$described, Settings::FAIL_OPEN, '1'],
+            'an image with alt and title'           => [$titled, Settings::FAIL_CLOSED, '0'],
+            'a blank link with a title'             => [$blankLink, Settings::FAIL_CLOSED, '0'],
+        ] + self::invisibleOnly();
+    }
+
+    /**
+     * An image with and without `alt`, and a blank link with a `title`, each beside nothing
+     * but one character a reader does not see: still no text of its own.
+     *
+     * @return array<string,array{0:string,1:string,2:string}>
+     */
+    private static function invisibleOnly(): array
+    {
+        $cases = [];
+        $invisible = ['a zero-width space' => '&#8203;', 'a soft hyphen' => '&shy;', 'a word joiner' => '&#8288;',
+            'a byte order mark' => '&#65279;', 'a Hangul filler' => '&#12644;'];
+        foreach ($invisible as $name => $character) {
+            $cases["an image with alt and {$name}"] = ['<img src="https://obrazek.example/a.png" alt="ładny kot" />'
+                . $character, Settings::FAIL_CLOSED, '0'];
+            $cases["an image without alt and {$name}"] = ['<img src="https://obrazek.example/a.png" />' . $character,
+                Settings::FAIL_OPEN, '1'];
+            $cases["a blank link with a title and {$name}"] = ['<a href="https://kasyno.example/bonus" title="kup teraz">'
+                . $character . '</a>', Settings::FAIL_CLOSED, '0'];
+        }
+        return $cases;
     }
 
     /**

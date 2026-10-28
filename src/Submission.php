@@ -191,7 +191,7 @@ final class Submission
         if (!$this->reopen($id)) {
             return false;
         }
-        $this->submit($id);
+        $this->submitIsolated($id);
         return true;
     }
 
@@ -237,10 +237,15 @@ final class Submission
     public function retry($commentId): void
     {
         $id = (int)$commentId;
-        $retryAt = $this->wp->meta($id, Meta::RETRY_AT);
-        if ($this->wp->meta($id, Meta::STATUS) === Meta::PENDING && $retryAt !== ''
-            && (int)$retryAt <= $this->wp->now() && !$this->pastDeadline($id)) {
-            $this->submit($id);
+        try {
+            $retryAt = $this->wp->meta($id, Meta::RETRY_AT);
+            if ($this->wp->meta($id, Meta::STATUS) === Meta::PENDING && $retryAt !== ''
+                && (int)$retryAt <= $this->wp->now() && !$this->pastDeadline($id)) {
+                $this->submit($id);
+            }
+        } catch (\Throwable $e) {
+            // The retry stays due, so the sweep sends it; WP-Cron's other events still run.
+            $this->outcome->failed(Log::STEP_SUBMIT, $id);
         }
     }
 
@@ -290,7 +295,6 @@ final class Submission
         }
         $this->wp->setMeta($id, Meta::SENT_CHARS, mb_strlen($text, 'UTF-8'));
         $this->wp->setMeta($id, Meta::SENT_HASH, hash('sha256', $text));
-        $this->wp->deleteMeta($id, Meta::RETRY_AT);
 
         $answer = $this->wp->post(
             $this->settings->all()['gateway_url'] . self::PATH,
@@ -359,7 +363,31 @@ final class Submission
         $this->wp->setMeta($id, Meta::STATUS, Meta::PENDING);
         $this->wp->setMeta($id, Meta::HELD_AT, $this->wp->now());
         $this->wp->setMeta($id, Meta::WP_APPROVED, $wordpress);
-        $this->submit($id);
+        $this->submitIsolated($id);
+    }
+
+    /**
+     * Sends a comment where an exception must not escape: in the author's or the editor's
+     * request, or in the webhook's. A failure is recorded by step and comment id, and the
+     * comment is left due for a retry, which the sweep sends.
+     *
+     * @param int $id The comment.
+     * @return void
+     */
+    private function submitIsolated(int $id): void
+    {
+        try {
+            $this->submit($id);
+        } catch (\Throwable $e) {
+            $this->outcome->failed(Log::STEP_SUBMIT, $id);
+            try {
+                if ($this->wp->meta($id, Meta::RETRY_AT) === '') {
+                    $this->wp->setMeta($id, Meta::RETRY_AT, $this->wp->now() + self::FIRST_BACKOFF_S);
+                }
+            } catch (\Throwable $ignored) {
+                // The receive timeout still gives the comment its failure mode.
+            }
+        }
     }
 
     /**
@@ -380,6 +408,8 @@ final class Submission
     {
         if ($status === 202) {
             $this->wp->setMeta($id, Meta::SUBMITTED_AT, $this->wp->now());
+            // Removed only now: a request that fails on the way leaves the retry due.
+            $this->wp->deleteMeta($id, Meta::RETRY_AT);
             $this->wp->deleteMeta($id, Meta::ATTEMPTS);
             $this->log->clearConfigError();
             return self::ACCEPTED;

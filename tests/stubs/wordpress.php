@@ -541,8 +541,13 @@ function current_user_can($capability, ...$args)
 
 // --- HTTP ----------------------------------------------------------------------------
 
+/** As `WP_Http::request`: `pre_http_request` may answer (or throw) before anything is sent. */
 function wp_remote_post($url, $args = [])
 {
+    $pre = apply_filters('pre_http_request', false, $args, $url);
+    if ($pre !== false) {
+        return $pre;
+    }
     WpStub::$requests[] = ['url' => $url, 'args' => $args];
     if (WpStub::$network) {
         $headers = [];
@@ -590,8 +595,14 @@ function is_wp_error($thing)
 
 // --- WP-Cron -------------------------------------------------------------------------
 
+/** As core: the `schedule_event` filter sees the event first and may drop it (or throw). */
 function wp_schedule_single_event($timestamp, $hook, $args = [], $wpError = false)
 {
+    $event = apply_filters('schedule_event', (object)['hook' => $hook, 'timestamp' => (int)$timestamp,
+        'schedule' => false, 'args' => $args]);
+    if (!$event) {
+        return false;
+    }
     WpStub::$events[] = ['at' => (int)$timestamp, 'hook' => $hook, 'args' => $args, 'recurrence' => null];
     return true;
 }

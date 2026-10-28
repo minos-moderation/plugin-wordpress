@@ -210,6 +210,12 @@ i numer komentarza — nigdy treść. Gdy brama odrzuca komentarze z powodu konf
 (np. `brak_klucza`, `brak_webhooka`, `profil_niedozwolony`), w panelu pojawia się
 komunikat z podpowiedzią; znika po pierwszym przyjętym komentarzu.
 
+Jeśli przy jednym komentarzu zawiedzie inna wtyczka (jej kod zgłosi błąd w trakcie
+publikacji, wysyłki albo powiadomienia), Minos zapisuje w dzienniku tylko krok i numer
+komentarza — bez treści błędu, która mogłaby zawierać tekst komentarza — i obsługuje
+pozostałe komentarze dalej. Ten komentarz czeka: krok zostaje powtórzony w następnym
+przebiegu WP-Cron albo przy ponownym doręczeniu werdyktu przez bramę.
+
 ## Wyłączenie i usunięcie
 
 - **Wyłączenie moderacji** w ustawieniach zatrzymuje wtyczkę (patrz „Instalacja”).

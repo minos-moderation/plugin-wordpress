@@ -14,6 +14,9 @@ defined('ABSPATH') || exit;
  * - A retry that fell due is sent again, in case its own one-off event was lost. The
  *   sweep sends at most {@see MAX_SUBMISSIONS} and stops at the first answer that asks to
  *   wait, so one run stays short while the gateway is unavailable.
+ *
+ * Each comment is handled on its own: an exception from another plugin's hook is recorded
+ * by step and comment id ({@see Outcome::failed}) and the run goes on.
  */
 final class Sweeper
 {
@@ -100,17 +103,25 @@ final class Sweeper
         $sent = 0;
         $sending = true;
         foreach ($this->wp->pendingCommentIds(self::BATCH) as $id) {
-            if ($this->submission->pastDeadline($id)) {
-                $this->outcome->timedOut($id, null);
-                continue;
+            // One comment that fails (another plugin's hook throwing) stops nothing else: it
+            // keeps waiting, and the next sweep does its step again.
+            $step = Log::STEP_TIMEOUT;
+            try {
+                if ($this->submission->pastDeadline($id)) {
+                    $this->outcome->timedOut($id, null);
+                    continue;
+                }
+                $retryAt = $this->wp->meta($id, Meta::RETRY_AT);
+                if (!$sending || $retryAt === '' || (int)$retryAt > $this->wp->now()) {
+                    continue;
+                }
+                $step = Log::STEP_SUBMIT;
+                $sent++;
+                $answer = $this->submission->submit($id);
+                $sending = $answer !== Submission::RETRY && $sent < self::MAX_SUBMISSIONS;
+            } catch (\Throwable $e) {
+                $this->outcome->failed($step, $id);
             }
-            $retryAt = $this->wp->meta($id, Meta::RETRY_AT);
-            if (!$sending || $retryAt === '' || (int)$retryAt > $this->wp->now()) {
-                continue;
-            }
-            $answer = $this->submission->submit($id);
-            $sent++;
-            $sending = $answer !== Submission::RETRY && $sent < self::MAX_SUBMISSIONS;
         }
     }
 }

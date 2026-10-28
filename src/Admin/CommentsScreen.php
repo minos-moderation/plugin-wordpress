@@ -101,8 +101,11 @@ final class CommentsScreen
             echo '<br /><small>' . esc_html__('wpis dłuższy niż 3000 znaków — oceniono początek', 'minos-moderation') . '</small>';
         }
         $error = $this->wp->meta($id, Meta::ERROR);
+        $step = Log::failedStep($error);
         if ($error === Meta::ERROR_MASKED_WRITE) {
             echo '<br /><small>' . esc_html__('nie udało się zapisać wersji zamaskowanej — komentarz czeka na ręczną moderację', 'minos-moderation') . '</small>';
+        } elseif ($step !== null) {
+            echo '<br /><small>' . esc_html(sprintf(__('błąd przy kroku „%s” (zgłosiła go wtyczka lub inna wtyczka; szczegóły nie są zapisywane)', 'minos-moderation'), self::stepLabel($step))) . '</small>';
         } elseif ($error !== '') {
             echo '<br /><small>' . esc_html(sprintf(__('błąd: %s', 'minos-moderation'), $error)) . '</small>';
         }
@@ -179,6 +182,23 @@ final class CommentsScreen
             'zablokowane'      => __('Zablokowany', 'minos-moderation'),
             Meta::UNASSESSED   => __('Nieoceniony', 'minos-moderation'),
         ];
+    }
+
+    /**
+     * A failed step's name, for the column.
+     *
+     * @param string $step One of the `Log::STEP_*` names.
+     * @return string Polish text.
+     */
+    public static function stepLabel(string $step): string
+    {
+        $labels = [
+            Log::STEP_TIMEOUT => __('koniec czasu oczekiwania', 'minos-moderation'),
+            Log::STEP_SUBMIT  => __('wysyłka do oceny', 'minos-moderation'),
+            Log::STEP_NOTIFY  => __('powiadomienie moderatora', 'minos-moderation'),
+            Log::STEP_VERDICT => __('zastosowanie werdyktu', 'minos-moderation'),
+        ];
+        return $labels[$step] ?? $step;
     }
 
     /**

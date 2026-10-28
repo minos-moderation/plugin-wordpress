@@ -310,10 +310,21 @@ final class SettingsPage
             printf('<tr><td>%s</td><td>%s</td><td><code>%s</code></td><td>#%d</td></tr>',
                 esc_html(wp_date('Y-m-d H:i:s', (int)($entry['time'] ?? 0))),
                 esc_html(isset($entry['http']) ? (string)$entry['http']
-                    : (($entry['code'] ?? null) === Meta::ERROR_MASKED_WRITE ? '—' : __('brak odpowiedzi', 'minos-moderation'))),
+                    : (self::ownCode($entry['code'] ?? null) ? '—' : __('brak odpowiedzi', 'minos-moderation'))),
                 esc_html((string)($entry['code'] ?? '—')), (int)($entry['comment'] ?? 0));
         }
         echo '</tbody></table>';
+    }
+
+    /**
+     * Whether a logged code is the plugin's own (no request was involved), not the gateway's.
+     *
+     * @param string|null $code The logged code.
+     * @return bool The answer.
+     */
+    private static function ownCode(?string $code): bool
+    {
+        return $code === Meta::ERROR_MASKED_WRITE || Log::failedStep($code) !== null;
     }
 
     /**

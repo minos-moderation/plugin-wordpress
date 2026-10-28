@@ -25,7 +25,9 @@ defined('ABSPATH') || exit;
  *    or another revision than the comment's current one) gets `200` and nothing else;
  * 4. the verdict applied ({@see Outcome}) — only while the comment still reads as the text
  *    that was sent; a comment edited since is sent again as its next revision instead;
- * 5. `200` at once: the only slow step, the e-mail, goes to WP-Cron.
+ * 5. `200` at once: the only slow step, the e-mail, goes to WP-Cron. When applying fails
+ *    with an exception (another plugin's hook), `500`: the comment still waits, so the
+ *    gateway's next delivery of the verdict is applied, not dropped as a repeat.
  */
 final class Receiver
 {
@@ -78,7 +80,7 @@ final class Receiver
      * Handles one delivery.
      *
      * @param \WP_REST_Request $request The request.
-     * @return \WP_REST_Response `200`, `400`, `401` or `404`, without a body worth reading.
+     * @return \WP_REST_Response `200`, `400`, `401`, `404` or `500`, without a body worth reading.
      */
     public function handle($request): \WP_REST_Response
     {
@@ -98,8 +100,8 @@ final class Receiver
         }
         if (preg_match(self::ID, $payload['id'], $match) === 1) {
             $id = (int)$match[1];
-            if ($this->outcome->awaitsVerdict($id, (int)($match[2] ?? 0))) {
-                $this->apply($id, $payload);
+            if ($this->outcome->awaitsVerdict($id, (int)($match[2] ?? 0)) && !$this->apply($id, $payload)) {
+                return $this->wp->response(500);
             }
         }
         return $this->wp->response(200);
@@ -111,14 +113,21 @@ final class Receiver
      *
      * @param int                 $id      A comment {@see Outcome::awaitsVerdict} accepts.
      * @param array<string,mixed> $payload The parsed payload.
-     * @return void
+     * @return bool False when it failed with an exception: recorded by step and comment id,
+     *     never by its message.
      */
-    private function apply(int $id, array $payload): void
+    private function apply(int $id, array $payload): bool
     {
-        if ($this->outcome->readsAsSent($id)) {
-            $this->outcome->verdict($id, $payload);
-        } elseif (!$this->submission->reassess($id)) {
-            $this->outcome->abandon($id);
+        try {
+            if ($this->outcome->readsAsSent($id)) {
+                $this->outcome->verdict($id, $payload);
+            } elseif (!$this->submission->reassess($id)) {
+                $this->outcome->abandon($id);
+            }
+        } catch (\Throwable $e) {
+            $this->outcome->failed(Log::STEP_VERDICT, $id);
+            return false;
         }
+        return true;
     }
 }

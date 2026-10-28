@@ -32,6 +32,10 @@ defined('ABSPATH') || exit;
  *   masked text waits for the moderator in {@see Meta::MASKED};
  * - the moderator's "awaiting moderation" e-mail, held back while a comment waited, goes
  *   out from WP-Cron when the outcome holds it.
+ *
+ * The final status is written after the action, never before: when another plugin's hook
+ * throws in the middle of one, the comment still waits, so the sweep, the retry or the
+ * gateway's next delivery of the verdict does the step again.
  */
 final class Outcome
 {
@@ -55,8 +59,8 @@ final class Outcome
     private $log;
 
     /**
-     * True while the plugin itself writes a comment's content, so the `edit_comment` it
-     * fires is not taken for a person's edit.
+     * True while the plugin itself changes a comment (its content or its status), so the
+     * `edit_comment` or `transition_comment_status` it fires is not taken for a person's.
      *
      * @var bool
      */
@@ -104,8 +108,14 @@ final class Outcome
     {
         $comment = $this->wp->comment($id);
         $sent = $this->wp->meta($id, Meta::SENT_HASH);
-        return $comment !== null && $sent !== ''
-            && hash_equals($sent, self::sentHash((string)$comment->comment_content));
+        if ($comment === null || $sent === '') {
+            return false;
+        }
+        // An earlier delivery of this verdict may have written the masked text before
+        // another plugin's hook failed: the text that was sent is then the kept original.
+        $original = $this->wp->meta($id, Meta::ORIGINAL);
+        $text = $original !== '' ? $original : (string)$comment->comment_content;
+        return hash_equals($sent, self::sentHash($text));
     }
 
     /**
@@ -121,7 +131,7 @@ final class Outcome
     }
 
     /**
-     * Whether the plugin is writing a comment's content right now ({@see writing}).
+     * Whether the plugin is changing a comment right now ({@see writing}).
      *
      * @return bool The answer.
      */
@@ -164,9 +174,23 @@ final class Outcome
             $this->applyLate($id, $qualification, $action, $masked);
             return;
         }
-        if (!$this->settle($id, $qualification)) {
-            return;
+        // A comment a person decided on keeps that decision: only the verdict is recorded.
+        if ($this->isHeld($id)) {
+            $this->act($id, $action, $masked);
         }
+        $this->settle($id, $qualification);
+    }
+
+    /**
+     * Does what a verdict asks of a held comment.
+     *
+     * @param int         $id     The comment.
+     * @param string      $action What {@see action} asked.
+     * @param string|null $masked The gateway's `ocenzurowany`.
+     * @return void
+     */
+    private function act(int $id, string $action, ?string $masked): void
+    {
         switch ($action) {
             case self::PUBLISH:
                 $this->publish($id);
@@ -179,7 +203,7 @@ final class Outcome
                 break;
             case self::BLOCK:
                 if ($this->settings->all()['blocked_mode'] === Settings::BLOCKED_SPAM
-                    && $this->wp->setStatus($id, 'spam')) {
+                    && $this->setStatus($id, 'spam')) {
                     break;
                 }
                 $this->hold($id);
@@ -206,8 +230,29 @@ final class Outcome
         if ($error !== null) {
             $this->wp->setMeta($id, Meta::ERROR, $error);
         }
-        if ($this->settle($id, Meta::UNASSESSED)) {
+        if ($this->isHeld($id)) {
             $this->failureMode($id);
+        }
+        $this->settle($id, Meta::UNASSESSED);
+    }
+
+    /**
+     * Records that a step for one comment failed with an exception (another plugin's hook,
+     * say): the step and the comment id in the log and in `_minos_error`, never the
+     * exception's message or trace, which may carry the comment's text or the key. The
+     * comment keeps waiting, so the step runs again. It never throws itself.
+     *
+     * @param string $step One of the `Log::STEP_*` names.
+     * @param int    $id   The comment.
+     * @return void
+     */
+    public function failed(string $step, int $id): void
+    {
+        try {
+            $this->log->failure($step, $id);
+            $this->wp->setMeta($id, Meta::ERROR, Log::failureCode($step));
+        } catch (\Throwable $e) {
+            // Nothing more can be recorded; the step stays undone and runs again.
         }
     }
 
@@ -266,8 +311,13 @@ final class Outcome
     public function notify($commentId): void
     {
         $id = (int)$commentId;
-        if ($id > 0 && $this->wp->comment($id) !== null) {
-            $this->wp->notifyModerator($id);
+        try {
+            if ($id > 0 && $this->wp->comment($id) !== null) {
+                $this->wp->notifyModerator($id);
+            }
+        } catch (\Throwable $e) {
+            // Another plugin's mail hook: the rest of WP-Cron's run must not stop here.
+            $this->failed(Log::STEP_NOTIFY, $id);
         }
     }
 
@@ -283,7 +333,7 @@ final class Outcome
      */
     public function onStatusChange($newStatus, $oldStatus, $comment): void
     {
-        if (is_object($comment) && isset($comment->comment_ID)) {
+        if (!$this->writing && is_object($comment) && isset($comment->comment_ID)) {
             $this->forgetAutoPublication((int)$comment->comment_ID);
         }
     }
@@ -326,21 +376,19 @@ final class Outcome
      */
     private function applyLate(int $id, string $qualification, string $action, ?string $masked): void
     {
-        // First, so the plugin's own changes below do not count as a person's.
-        $this->wp->deleteMeta($id, Meta::AUTO_PUBLISHED);
-        $this->wp->setMeta($id, Meta::STATUS, $qualification);
         $comment = $this->wp->comment($id);
-        if ($comment === null || (string)$comment->comment_approved !== '1'
-            || $action === self::PUBLISH || $action === self::FAILURE_MODE) {
-            return;
+        if ($comment !== null && (string)$comment->comment_approved === '1'
+            && $action !== self::PUBLISH && $action !== self::FAILURE_MODE
+            && !($action === self::PUBLISH_MASKED && $this->replacesWithMask($id, $masked))) {
+            $this->keepMask($id, $masked);
+            if ($this->setStatus($id, 'hold')) {
+                $this->scheduleNotification($id);
+            }
         }
-        if ($action === self::PUBLISH_MASKED && $this->replacesWithMask($id, $masked)) {
-            return;
-        }
-        $this->keepMask($id, $masked);
-        if ($this->wp->setStatus($id, 'hold')) {
-            $this->scheduleNotification($id);
-        }
+        // After the action: when it fails, the next delivery of the verdict still finds the
+        // comment waiting for it.
+        $this->wp->deleteMeta($id, Meta::AUTO_PUBLISHED);
+        $this->settle($id, $qualification);
     }
 
     /**
@@ -355,25 +403,39 @@ final class Outcome
             $this->hold($id);
             return;
         }
-        if ($this->wp->meta($id, Meta::WP_APPROVED) === '1' && $this->wp->setStatus($id, 'approve')) {
-            // Set after the approval, so its own status change does not clear it.
+        if ($this->wp->meta($id, Meta::WP_APPROVED) === '1') {
+            // Before the approval, so a hook that fails after it leaves the mark in place;
+            // the approval itself is the plugin's own change and does not clear it.
             $this->wp->setMeta($id, Meta::AUTO_PUBLISHED, '1');
-            return;
+            if ($this->setStatus($id, 'approve')) {
+                return;
+            }
+            $this->wp->deleteMeta($id, Meta::AUTO_PUBLISHED);
         }
         $this->hold($id);
     }
 
     /**
-     * Records the final status and ends the waiting.
+     * Records the final status and ends the waiting: the last step, after the action.
      *
      * @param int    $id     The comment.
      * @param string $status The verdict or {@see Meta::UNASSESSED}.
-     * @return bool Whether the comment is still held, so the plugin may change it.
+     * @return void
      */
-    private function settle(int $id, string $status): bool
+    private function settle(int $id, string $status): void
     {
         $this->wp->setMeta($id, Meta::STATUS, $status);
         $this->wp->deleteMeta($id, Meta::RETRY_AT);
+    }
+
+    /**
+     * Whether a comment is still held, so the plugin may change it.
+     *
+     * @param int $id The comment.
+     * @return bool The answer.
+     */
+    private function isHeld(int $id): bool
+    {
         $comment = $this->wp->comment($id);
         return $comment !== null && (string)$comment->comment_approved === '0';
     }
@@ -387,7 +449,7 @@ final class Outcome
      */
     private function publish(int $id): void
     {
-        if ($this->wp->meta($id, Meta::WP_APPROVED) === '1' && $this->wp->setStatus($id, 'approve')) {
+        if ($this->wp->meta($id, Meta::WP_APPROVED) === '1' && $this->setStatus($id, 'approve')) {
             return;
         }
         $this->hold($id);
@@ -499,14 +561,22 @@ final class Outcome
         if ($comment === null) {
             return false;
         }
-        $original = (string)$comment->comment_content;
+        $html = Text::asHtml($masked);
+        $content = (string)$comment->comment_content;
+        $kept = $this->wp->meta($id, Meta::ORIGINAL);
+        // An earlier delivery of this verdict wrote the masked text before another plugin's
+        // hook failed: the text to check is then the kept original.
+        $written = $kept !== '' && $content === $html;
+        $original = $written ? $kept : $content;
         $plain = Text::plain($original);
         if (Text::isCut($plain) || (int)$this->wp->meta($id, Meta::SENT_CHARS) !== mb_strlen($plain, 'UTF-8')
             || !hash_equals($this->wp->meta($id, Meta::SENT_HASH), hash('sha256', $plain))
             || !Text::isPlain($original) || !Text::maskFits($plain, $masked)) {
             return false;
         }
-        $html = Text::asHtml($masked);
+        if ($written) {
+            return true;
+        }
         $this->wp->setMeta($id, Meta::ORIGINAL, $original);
         if ($this->replaceContent($id, $html) && $this->content($id) === $html) {
             return true;
@@ -522,6 +592,24 @@ final class Outcome
         $this->wp->setMeta($id, Meta::ERROR, Meta::ERROR_MASKED_WRITE);
         $this->log->record($id, null, Meta::ERROR_MASKED_WRITE);
         return false;
+    }
+
+    /**
+     * Changes a comment's status; the `transition_comment_status` it fires is the plugin's
+     * own.
+     *
+     * @param int    $id     The comment.
+     * @param string $status `approve`, `hold` or `spam`.
+     * @return bool Whether the status was written.
+     */
+    private function setStatus(int $id, string $status): bool
+    {
+        $this->writing = true;
+        try {
+            return $this->wp->setStatus($id, $status);
+        } finally {
+            $this->writing = false;
+        }
     }
 
     /**

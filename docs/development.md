@@ -100,6 +100,16 @@ Decisions worth knowing before changing anything:
   it. On a failure the original is put back if needed,
   `_minos_original` goes once the content is the original again, the comment stays held
   and `zapis_zamaskowanej_nieudany` is recorded (meta and log).
+- **Row isolation.** Every step for one comment runs in `try { … } catch (\Throwable $e)`:
+  the sweep (per comment), the retry event, the moderator's e-mail event, the webhook's
+  verdict and the submission in the author's or editor's request. A failure (another
+  plugin's hook throwing) is recorded by `Outcome::failed` as the step and the comment id
+  (`wyjatek_<step>` in the log and in `_minos_error`), never the exception's message or
+  trace. The final status is written after the action and `_minos_retry_at` is removed
+  only after a `202`, so the comment keeps waiting: the next sweep repeats a time-out or a
+  submission, and the webhook answers `500`, so the gateway's next delivery of the verdict
+  is applied rather than dropped as a repeat. A masked text written before a hook threw is
+  recognised on that redelivery (`_minos_original` is the text that was sent).
 - **Slashes.** `wp_update_comment` and `update_comment_meta` unslash their input, so
   `Platform` slashes it; the stubs unslash too, and a test holds a backslash.
 - **Notifications.** A `notify_moderator` filter suppresses the "awaiting moderation" e-mail

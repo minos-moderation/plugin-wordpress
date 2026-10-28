@@ -354,11 +354,13 @@ JSON on disk: never send real comments to it.
 
 `composer.json` requires `minos-moderation/client-php` at `dev-main` from its GitHub
 repository (a `vcs` repository entry); `composer.lock` pins the exact commit, so a build is
-reproducible. Until the client's `v0.1.0` tag exists, the lock IS the pin (commit
-`fc4beb7`); once it does, replace `dev-main` with `^0.1` and run
-`composer update minos-moderation/client-php`. To move the pin before that, run the same
-update after reviewing the client's change, and commit the lock. The plugin never forks
-the client's verification.
+reproducible. The lock IS the pin: commit `fc4beb7` of the client's `main`, from before
+the client's first release. The client has no release tag yet; its first two are to stand
+at `7d58a76` (`v0.1.0`) and `e5df7d6` (`v0.2.0`, which only adds to 0.1.0). The plugin
+moves to them in a pull request of its own: replace `dev-main` with `^0.2`, run
+`composer update minos-moderation/client-php` and commit the lock. Until then, move the
+pin only with the same update at a reviewed commit of the client's `main`. The plugin
+never forks the client's verification.
 
 `config.platform-check` is off: WordPress's `Requires PHP: 7.4` header already refuses
 older hosts, and Composer's check would stop the whole site instead.

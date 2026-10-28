@@ -64,6 +64,13 @@ różni się od zegara serwera o więcej niż 5 minut — oraz każde doręczeni
 sekret nie spełnia warunków formularza (16–256 widocznych znaków ASCII), np. wpisany ręcznie
 do bazy.
 
+W trybie konserwacji WordPressa (plik `.maintenance` w czasie aktualizacji, najwyżej
+10 minut) webhook odpowiada HTTP 503, a brama ponawia doręczenie werdyktu do ok. 12 minut
+od przyjęcia komentarza; werdykt niedoręczony w tym czasie przepada, a komentarz po czasie
+oczekiwania trafia do trybu „Gdy brak werdyktu”. Własna strona konserwacji
+(`wp-content/maintenance.php`) musi odpowiadać kodem 503 — inaczej brama uzna doręczenie
+za udane i werdykt przepadnie.
+
 ## Ustawienia
 
 | Ustawienie | Domyślnie | Znaczenie |

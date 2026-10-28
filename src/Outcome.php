@@ -381,9 +381,11 @@ final class Outcome
             && $action !== self::PUBLISH && $action !== self::FAILURE_MODE
             && !($action === self::PUBLISH_MASKED && $this->replacesWithMask($id, $masked))) {
             $this->keepMask($id, $masked);
-            if ($this->setStatus($id, 'hold')) {
-                $this->scheduleNotification($id);
-            }
+            // Before the hold: when a hook throws after WordPress held the comment, the next
+            // delivery finds it held already and skips this step, so the e-mail must be on
+            // its way by then. A comment no longer held when it runs gets none.
+            $this->scheduleNotification($id);
+            $this->setStatus($id, 'hold');
         }
         // After the action: when it fails, the next delivery of the verdict still finds the
         // comment waiting for it.

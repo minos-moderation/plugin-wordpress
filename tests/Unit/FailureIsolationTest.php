@@ -209,6 +209,29 @@ final class FailureIsolationTest extends PluginTestCase
         }), 'approved once');
     }
 
+    public function testALateVerdictWhoseHoldFailsStillTellsTheModerator(): void
+    {
+        $this->threeComments(['failure_mode' => Settings::FAIL_OPEN]);
+        $this->now += Settings::DEFAULT_TIMEOUT_MIN * 60;
+        do_action(Sweeper::HOOK);
+        self::assertSame(['1', '1'], [$this->field($this->ids[1], 'comment_approved'), $this->field($this->ids[1], Meta::AUTO_PUBLISHED)]);
+        WpStub::$events = [];
+        // WordPress holds the comment, then another plugin's hook on the change throws.
+        $this->breakFor('transition_comment_status', function ($new, $old, $comment): bool {
+            return $new === 'unapproved' && is_object($comment) && (int)$comment->comment_ID === $this->ids[1];
+        });
+
+        self::assertSame(500, $this->deliver(self::verdict($this->ids[1], 'zablokowane')));
+        self::assertSame(200, $this->deliver(self::verdict($this->ids[1], 'zablokowane')));
+
+        self::assertSame(['0', 'zablokowane'], [$this->field($this->ids[1], 'comment_approved'), $this->field($this->ids[1], Meta::STATUS)]);
+        foreach (self::events(Outcome::HOOK_NOTIFY) as $event) {
+            do_action($event['hook'], ...$event['args']);
+        }
+        self::assertContains(['moderator', $this->ids[1]], WpStub::$emails, 'the moderator still gets the e-mail');
+        $this->assertLoggedOnce(Log::STEP_VERDICT);
+    }
+
     public function testAMaskedWriteThatFailsBeforeTheUpdateIsDoneByTheRedelivery(): void
     {
         $this->threeComments(['censored_mode' => Settings::CENSORED_PUBLISH]);

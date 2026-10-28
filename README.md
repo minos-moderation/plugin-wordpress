@@ -169,7 +169,8 @@ w czasie oczekiwania, gdy brama odrzuci komentarz z powodu błędu konfiguracji 
 klucz) albo gdy komentarz nie ma tekstu do oceny (np. sam odnośnik bez treści albo sam
 obrazek — także z opisem `alt` lub `title`, bo brama nie ocenia obrazów, a werdykt o samym
 opisie dotyczyłby czegoś, czego nie widziała; niewidoczne znaki, np. spacja o zerowej
-szerokości, nie są tekstem; taki komentarz nie jest wysyłany, a kolumna
+szerokości albo samotny znak łączący bez litery, do której mógłby się dołączyć, nie są
+tekstem (litera z akcentem nim jest); taki komentarz nie jest wysyłany, a kolumna
 **Minos** podaje powód „brak tekstu do oceny”). Wtedy:
 
 - **fail-closed** (domyślnie) — komentarz zostaje do ręcznej moderacji;

@@ -56,10 +56,12 @@ final class Text
     /**
      * What a reader does not see on its own: whitespace and separators, format characters
      * (`\p{Cf}`: a zero-width space, a soft hyphen, a word joiner, a byte order mark…),
-     * controls, and the blank fillers some scripts carry (the Hangul fillers, the blank
-     * Braille pattern).
+     * marks (`\p{M}`: a combining grapheme joiner, a variation selector, an accent), controls,
+     * and the blank fillers some scripts carry (the Hangul fillers, the blank Braille
+     * pattern). A mark is read only on the character it combines with: alone it is no text,
+     * and real text keeps its base characters (`e` + U+0301 still has the `e`).
      */
-    private const INVISIBLE = '/[\s\p{Z}\p{Cf}\p{Cc}\x{115F}\x{1160}\x{3164}\x{FFA0}\x{2800}]+/u';
+    private const INVISIBLE = '/[\s\p{Z}\p{Cf}\p{M}\p{Cc}\x{115F}\x{1160}\x{3164}\x{FFA0}\x{2800}]+/u';
 
     /** A `title` or `alt` attribute inside a tag, quoted or not. */
     private const TEXT_ATTRIBUTE = '/[\s"\'](?:title|alt)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s"\'=<>`]+))/i';

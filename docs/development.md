@@ -158,8 +158,9 @@ Decisions worth knowing before changing anything:
   `alt` or a blank link with a `title`; the gateway assesses no image, and a verdict on its
   `alt` would stand for the image), or holds nothing a reader sees (`Text::hasOwnText`:
   whitespace, separators, format characters such as a zero-width space, a soft hyphen, a
-  word joiner or a byte order mark, controls, the blank fillers; when that check cannot
-  run, the comment is sent), is held and gets the failure
+  word joiner or a byte order mark, marks with nothing to combine with such as a lone
+  U+034F or U+FE0F (a letter keeps its accent: `e` + U+0301 is text), controls, the blank
+  fillers; when that check cannot run, the comment is sent), is held and gets the failure
   mode at once, without a request, with `_minos_error` `brak_tekstu_do_oceny` (the plugin's
   own code, not the gateway's `brak_tekstu`) shown in the "Minos" column; under fail-open
   the publication is marked as one without an assessment.

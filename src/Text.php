@@ -168,6 +168,19 @@ final class Text
     }
 
     /**
+     * Whether stored content is a masked text of an original: plain text that fits the
+     * original's plain text ({@see isPlain}, {@see maskFits}).
+     *
+     * @param string $original The original content.
+     * @param string $content  The stored content.
+     * @return bool The answer.
+     */
+    public static function isMaskOf(string $original, string $content): bool
+    {
+        return self::isPlain($content) && self::maskFits(self::plain($original), self::plain($content));
+    }
+
+    /**
      * Plain text as HTML that shows exactly that text.
      *
      * @param string $text The text.

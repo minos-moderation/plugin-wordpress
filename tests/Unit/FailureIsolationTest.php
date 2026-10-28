@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Minos\WordPress\Tests\Unit;
 
+use Minos\WordPress\Admin\CommentsScreen;
 use Minos\WordPress\Log;
 use Minos\WordPress\Meta;
 use Minos\WordPress\Outcome;
@@ -308,6 +309,67 @@ final class FailureIsolationTest extends PluginTestCase
         self::assertNull($this->field($this->ids[1], Meta::AUTO_PUBLISHED));
         self::assertSame('Testowy komentarz numer 1.', $this->field($this->ids[1], Meta::ORIGINAL));
         self::assertCount($requests, WpStub::$requests, 'its own mask is not taken for an edit');
+    }
+
+    public function testARevisionThatSentAMaskIsSettledByItsVerdictNotReopenedAgain(): void
+    {
+        $this->threeComments(['censored_mode' => Settings::CENSORED_PUBLISH]);
+        $this->breakFor('transition_comment_status', function ($new, $old, $comment): bool {
+            return $new === 'approved' && is_object($comment) && (int)$comment->comment_ID === $this->ids[1];
+        });
+        $masked = 'Testowy █████████ numer 1.';
+        self::assertSame(500, $this->deliver(self::verdict($this->ids[1], 'ocenzurowane', ['ocenzurowany' => $masked])));
+        // Switched off and on before the redelivery: the half-finished publication is sent
+        // again as revision 1, and what it sends is the mask itself.
+        $settings = WpStub::$options[Settings::OPTION];
+        update_option(Settings::OPTION, ['enabled' => false] + $settings);
+        update_option(Settings::OPTION, ['enabled' => true] + $settings);
+        foreach (self::events(Submission::HOOK_RETRY) as $event) {
+            do_action($event['hook'], ...$event['args']);
+        }
+        $sent = [];
+        foreach (WpStub::$requests as $request) {
+            $item = json_decode($request['args']['body'], true)['elementy'][0];
+            $sent[$item['id']] = $item['tekst'];
+        }
+        self::assertSame($masked, $sent['wp:' . $this->ids[1] . '.1'] ?? null, 'revision 1 sent the mask');
+        $requests = count(WpStub::$requests);
+        WpStub::$events = [];
+
+        self::assertSame(200, $this->deliver(['id' => 'wp:' . $this->ids[1] . '.1'] + self::verdict($this->ids[1], 'bezpieczne')));
+        foreach (self::events(Submission::HOOK_RETRY) as $event) {
+            do_action($event['hook'], ...$event['args']);
+        }
+
+        self::assertSame(['bezpieczne', '1'], [$this->field($this->ids[1], Meta::STATUS), $this->field($this->ids[1], Meta::REVISION)],
+            'the verdict for the text revision 1 sent is applied: no further revision');
+        self::assertSame('1', $this->field($this->ids[1], 'comment_approved'));
+        self::assertCount($requests, WpStub::$requests);
+    }
+
+    public function testTheColumnSaysTheContentWasMaskedOnlyWhileItIs(): void
+    {
+        $this->threeComments(['censored_mode' => Settings::CENSORED_PUBLISH]);
+        $masked = 'Testowy █████████ numer 0.';
+        $this->deliver(self::verdict($this->ids[0], 'ocenzurowane', ['ocenzurowany' => $masked]));
+        self::assertStringContainsString('treść zastąpiona wersją zamaskowaną', $this->column($this->ids[0]));
+
+        // A moderator edits the published masked comment: the kept original stays, the mask is gone.
+        wp_update_comment(['comment_ID' => $this->ids[0], 'comment_content' => 'Treść poprawiona przez moderatora.']);
+
+        self::assertSame('Testowy komentarz numer 0.', $this->field($this->ids[0], Meta::ORIGINAL));
+        self::assertStringNotContainsString('treść zastąpiona wersją zamaskowaną', $this->column($this->ids[0]));
+    }
+
+    /**
+     * What the "Minos" column shows for a comment.
+     */
+    private function column(int $id): string
+    {
+        ob_start();
+        (new CommentsScreen($this->plugin->wp, $this->plugin->settings, $this->plugin->log))
+            ->renderColumn(CommentsScreen::COLUMN, $id);
+        return (string)ob_get_clean();
     }
 
     public function testAModeratorEmailThatFailsDoesNotStopTheOthers(): void

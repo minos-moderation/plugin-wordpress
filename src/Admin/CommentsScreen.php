@@ -8,6 +8,7 @@ use Minos\WordPress\Log;
 use Minos\WordPress\Meta;
 use Minos\WordPress\Platform;
 use Minos\WordPress\Settings;
+use Minos\WordPress\Text;
 
 defined('ABSPATH') || exit;
 
@@ -114,7 +115,10 @@ final class CommentsScreen
         if ($this->wp->meta($id, Meta::AUTO_PUBLISHED) === '1') {
             echo '<br /><small>' . esc_html__('opublikowano bez werdyktu (fail-open); spóźniony werdykt zostanie zastosowany', 'minos-moderation') . '</small>';
         }
-        if ($this->wp->meta($id, Meta::ORIGINAL) !== '') {
+        $original = $this->wp->meta($id, Meta::ORIGINAL);
+        $comment = $this->wp->comment($id);
+        // Only while the content is that original's mask: an edit since replaced the mask.
+        if ($original !== '' && $comment !== null && Text::isMaskOf($original, (string)$comment->comment_content)) {
             echo '<br /><small>' . esc_html__('treść zastąpiona wersją zamaskowaną; oryginał zachowano', 'minos-moderation') . '</small>';
         }
         $masked = $this->wp->meta($id, Meta::MASKED);

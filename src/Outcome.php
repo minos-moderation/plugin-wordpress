@@ -111,15 +111,15 @@ final class Outcome
         if ($comment === null || $sent === '') {
             return false;
         }
-        // An earlier delivery of this verdict may have written the masked text before
-        // another plugin's hook failed: the text that was sent is then the kept original,
-        // but only while the content is still that original's mask. Any other content
-        // (an edit since) is compared as it is.
+        // The content as it is; or, while the content is still the mask of a kept
+        // original, that original: an earlier delivery of this verdict may have written the
+        // mask before another plugin's hook failed. Both are tried, because a later
+        // revision may have sent the mask itself, and only the content then matches.
         $content = (string)$comment->comment_content;
         $original = $this->wp->meta($id, Meta::ORIGINAL);
-        $masked = $original !== '' && Text::isPlain($content)
-            && Text::maskFits(Text::plain($original), Text::plain($content));
-        return hash_equals($sent, self::sentHash($masked ? $original : $content));
+        return hash_equals($sent, self::sentHash($content))
+            || ($original !== '' && Text::isMaskOf($original, $content)
+                && hash_equals($sent, self::sentHash($original)));
     }
 
     /**

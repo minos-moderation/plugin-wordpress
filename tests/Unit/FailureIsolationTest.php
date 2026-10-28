@@ -268,6 +268,48 @@ final class FailureIsolationTest extends PluginTestCase
         self::assertCount($requests, WpStub::$requests, 'its own masked text is never sent as a new revision');
     }
 
+    public function testAnEditAfterAHalfFinishedMaskedPublicationIsSentAgainNotSettledOnTheOldVerdict(): void
+    {
+        $this->threeComments(['censored_mode' => Settings::CENSORED_PUBLISH]);
+        $this->breakFor('transition_comment_status', function ($new, $old, $comment): bool {
+            return $new === 'approved' && is_object($comment) && (int)$comment->comment_ID === $this->ids[1];
+        });
+        $masked = 'Testowy █████████ numer 1.';
+        self::assertSame(500, $this->deliver(self::verdict($this->ids[1], 'ocenzurowane', ['ocenzurowany' => $masked])));
+        self::assertSame(['1', $masked], [$this->field($this->ids[1], 'comment_approved'), $this->field($this->ids[1], 'comment_content')]);
+        self::assertTrue($this->pending($this->ids[1]));
+        $before = count(WpStub::$requests);
+
+        wp_update_comment(['comment_ID' => $this->ids[1], 'comment_content' => 'Całkiem nowa treść, nieoceniona.']);
+
+        self::assertCount($before + 1, WpStub::$requests, 'the edited text is sent');
+        self::assertSame('wp:' . $this->ids[1] . '.1', $this->sentBody()['elementy'][0]['id']);
+        self::assertSame('0', $this->field($this->ids[1], 'comment_approved'), 'held while it is assessed');
+        self::assertSame(200, $this->deliver(self::verdict($this->ids[1], 'ocenzurowane', ['ocenzurowany' => $masked])));
+        self::assertTrue($this->pending($this->ids[1]), 'the old text\'s verdict settles nothing');
+        self::assertSame(['0', 'Całkiem nowa treść, nieoceniona.'],
+            [$this->field($this->ids[1], 'comment_approved'), $this->field($this->ids[1], 'comment_content')]);
+    }
+
+    public function testAHalfFinishedPublicationIsFinishedByTheRedelivery(): void
+    {
+        $this->threeComments(['censored_mode' => Settings::CENSORED_PUBLISH]);
+        $this->breakFor('transition_comment_status', function ($new, $old, $comment): bool {
+            return $new === 'approved' && is_object($comment) && (int)$comment->comment_ID === $this->ids[1];
+        });
+        $masked = 'Testowy █████████ numer 1.';
+        self::assertSame(500, $this->deliver(self::verdict($this->ids[1], 'ocenzurowane', ['ocenzurowany' => $masked])));
+        $requests = count(WpStub::$requests);
+
+        self::assertSame(200, $this->deliver(self::verdict($this->ids[1], 'ocenzurowane', ['ocenzurowany' => $masked])));
+
+        self::assertSame(['1', 'ocenzurowane', $masked], [$this->field($this->ids[1], 'comment_approved'),
+            $this->field($this->ids[1], Meta::STATUS), $this->field($this->ids[1], 'comment_content')]);
+        self::assertNull($this->field($this->ids[1], Meta::AUTO_PUBLISHED));
+        self::assertSame('Testowy komentarz numer 1.', $this->field($this->ids[1], Meta::ORIGINAL));
+        self::assertCount($requests, WpStub::$requests, 'its own mask is not taken for an edit');
+    }
+
     public function testAModeratorEmailThatFailsDoesNotStopTheOthers(): void
     {
         $this->threeComments(['blocked_mode' => Settings::HOLD]);

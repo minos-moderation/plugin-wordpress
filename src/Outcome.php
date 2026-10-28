@@ -112,10 +112,14 @@ final class Outcome
             return false;
         }
         // An earlier delivery of this verdict may have written the masked text before
-        // another plugin's hook failed: the text that was sent is then the kept original.
+        // another plugin's hook failed: the text that was sent is then the kept original,
+        // but only while the content is still that original's mask. Any other content
+        // (an edit since) is compared as it is.
+        $content = (string)$comment->comment_content;
         $original = $this->wp->meta($id, Meta::ORIGINAL);
-        $text = $original !== '' ? $original : (string)$comment->comment_content;
-        return hash_equals($sent, self::sentHash($text));
+        $masked = $original !== '' && Text::isPlain($content)
+            && Text::maskFits(Text::plain($original), Text::plain($content));
+        return hash_equals($sent, self::sentHash($masked ? $original : $content));
     }
 
     /**
@@ -453,8 +457,17 @@ final class Outcome
      */
     private function publish(int $id): void
     {
-        if ($this->wp->meta($id, Meta::WP_APPROVED) === '1' && $this->setStatus($id, 'approve')) {
-            return;
+        if ($this->wp->meta($id, Meta::WP_APPROVED) === '1') {
+            // Marked first as the plugin's own publication: when a hook throws after
+            // WordPress approved the comment, the step is unfinished, so an edit meanwhile
+            // holds the comment and sends it again (not a person's decision), and the next
+            // delivery applies the verdict as a late one. Removed once the approval is done.
+            $this->wp->setMeta($id, Meta::AUTO_PUBLISHED, '1');
+            $published = $this->setStatus($id, 'approve');
+            $this->wp->deleteMeta($id, Meta::AUTO_PUBLISHED);
+            if ($published) {
+                return;
+            }
         }
         $this->hold($id);
     }

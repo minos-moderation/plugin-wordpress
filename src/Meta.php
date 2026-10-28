@@ -82,8 +82,10 @@ final class Meta
 
     /**
      * `1` while a comment stands published by the plugin's own fail-open decision, so a
-     * verdict that arrives later may still be applied to it. Any status change or edit
-     * after that publication removes it: a person's decision stands.
+     * verdict that arrives later may still be applied to it; also while the plugin's own
+     * approval on a verdict is unfinished (another plugin's hook threw after WordPress
+     * approved it). A person's status change after that publication removes it: a person's
+     * decision stands. An edit sends the comment again, held.
      */
     public const AUTO_PUBLISHED = '_minos_auto_published';
 

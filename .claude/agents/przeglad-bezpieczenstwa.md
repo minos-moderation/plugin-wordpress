@@ -1,6 +1,6 @@
 ---
 name: przeglad-bezpieczenstwa
-description: Pre-merge review of a PR to the Minos WordPress plugin that touches the receiver, the submission, the verdicts, a publish/hold setting, key or secret handling, or the bundled client version. Use once per such PR, before merge. Read-only; confirms findings by running code.
+description: Pre-merge review of a PR to the Minos WordPress plugin that touches the receiver, the submission, the verdicts, a publish/hold setting, key or secret handling, or the bundled client version. Use once per such PR, before merge. Read-only by instruction; Bash runs checks and probes that confirm findings.
 model: opus
 effort: high
 tools: Read, Grep, Glob, Bash

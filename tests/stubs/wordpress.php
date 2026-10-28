@@ -182,6 +182,19 @@ final class WpStub
     }
 
     /**
+     * The gateway's `202` taking every item of a request, as it answers by default.
+     *
+     * @param array<string,mixed> $args The `wp_remote_post` arguments of the request.
+     * @return array{response:array{code:int},body:string} The answer.
+     */
+    public static function accepted(array $args): array
+    {
+        $body = json_decode((string)($args['body'] ?? ''), true);
+        $ids = is_array($body) && is_array($body['elementy'] ?? null) ? array_column($body['elementy'], 'id') : [];
+        return ['response' => ['code' => 202], 'body' => (string)json_encode(['przyjete' => $ids])];
+    }
+
+    /**
      * Makes the next `wp_remote_post` fail without an answer.
      *
      * @return void
@@ -365,14 +378,17 @@ function delete_option($name)
 
 // --- Comments and their meta ---------------------------------------------------------
 
+/** As core: the `get_comment` filter sees the comment (and may throw). */
 function get_comment($comment = null, $output = OBJECT)
 {
-    return WpStub::commentObject((int)$comment);
+    $found = WpStub::commentObject((int)$comment);
+    return $found === null ? null : apply_filters('get_comment', $found);
 }
 
 /**
- * The subset of `WP_Comment_Query` the plugin uses: status, one meta pair, user or e-mail,
- * a `comment_date_gmt` lower bound, ids or a count, a limit.
+ * The subset of `WP_Comment_Query` the plugin uses: status, one meta pair (`=`, `<`, `>=`),
+ * user or e-mail, a `comment_date_gmt` lower bound, ids, objects or a count, a limit, the
+ * order by id (descending unless `ASC`, as in core).
  */
 function get_comments($args = [])
 {
@@ -394,7 +410,8 @@ function get_comments($args = [])
                 $numeric = ($args['meta_type'] ?? '') === 'NUMERIC';
                 $left = $numeric ? (int)$meta : $meta;
                 $right = $numeric ? (int)$args['meta_value'] : (string)$args['meta_value'];
-                if (($compare === '=' && $left !== $right) || ($compare === '<' && !($left < $right))) {
+                if (($compare === '=' && $left !== $right) || ($compare === '<' && !($left < $right))
+                    || ($compare === '>=' && !($left >= $right))) {
                     continue;
                 }
             }
@@ -412,7 +429,12 @@ function get_comments($args = [])
         }
         $found[] = $id;
     }
-    sort($found);
+    // Core's default order is descending.
+    if (strtoupper((string)($args['order'] ?? 'DESC')) === 'ASC') {
+        sort($found);
+    } else {
+        rsort($found);
+    }
     if (!empty($args['count'])) {
         return count($found);
     }
@@ -601,7 +623,7 @@ function wp_remote_post($url, $args = [])
         return ['response' => ['code' => $status], 'body' => (string)$body];
     }
     if (WpStub::$responses === []) {
-        return ['response' => ['code' => 202], 'body' => '{"przyjete":[]}'];
+        return WpStub::accepted($args);
     }
     return array_shift(WpStub::$responses);
 }

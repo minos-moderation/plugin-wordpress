@@ -25,6 +25,11 @@ Licencja: GPL-2.0 lub nowsza (plik `LICENSE`).
    ustawienia i zaznacz **Moderacja włączona**.
 4. Przekaż operatorowi **adres webhooka** widoczny na stronie ustawień (patrz niżej).
 
+**Kopia testowa strony** (np. staging) potrzebuje własnego klucza i sekretu — poproś o nie
+operatora. Nie wpisuj tam klucza strony produkcyjnej: brama wysyła werdykty zawsze na adres
+webhooka zapisany przy kluczu, czyli na stronę produkcyjną, a numery komentarzy obu kopii
+się pokrywają, więc werdykt dla komentarza z kopii trafiłby do innego komentarza.
+
 Świeżo zainstalowana wtyczka jest wyłączona i nic nie robi: komentarze działają tak jak
 bez niej. Włączona bez poprawnego klucza API lub sekretu webhooka nie wysyła komentarzy,
 a każdy nowy komentarz od razu trafia do trybu „Gdy brak werdyktu” (przy fail-closed czeka
@@ -67,9 +72,9 @@ do bazy.
 | Adres bramy | `https://gateway.wergiliusz.app` | Zmieniaj tylko na polecenie operatora. Wymagane `https://` (`http://` tylko dla `localhost` — do testów z atrapą bramy). |
 | Klucz API | — | `wgb2b_…`. Po zapisaniu strona pokazuje tylko jego początek; puste pole przy zapisie zostawia zapisany klucz. |
 | Sekret webhooka | — | Służy wyłącznie do sprawdzania podpisu werdyktów i nigdy nie jest wysyłany. Strona pokazuje tylko jego początek. |
-| Profil oceny | `forum_adult` | `forum_adult` — forum dla dorosłych; `forum_teen` — forum z udziałem nastolatków. Klucz musi mieć dostęp do wybranego profilu. |
+| Profil oceny | `forum_adult` | `forum_adult` — forum dla dorosłych; `forum_teen` — forum dla dzieci i młodzieży. Klucz musi mieć dostęp do wybranego profilu. |
 | Gdy brak werdyktu | fail-closed | Co zrobić z komentarzem bez werdyktu: **fail-open** — opublikować, **fail-closed** — zostawić do ręcznej moderacji. Patrz niżej. |
-| Czas oczekiwania na werdykt | 20 min (najmniej 20) | Po tym czasie komentarz bez werdyktu trafia do trybu „Gdy brak werdyktu”. Brama próbuje doręczyć werdykt przez 15 minut, stąd najmniej 20 minut. Werdykt, który nadejdzie później, jest stosowany do komentarza opublikowanego przy fail-open (patrz niżej). |
+| Czas oczekiwania na werdykt | 20 min (od 20 do 1440) | Po tym czasie komentarz bez werdyktu trafia do trybu „Gdy brak werdyktu”. Brama próbuje doręczyć werdykt przez 15 minut, stąd najmniej 20 minut. Werdykt, który nadejdzie później, jest stosowany do komentarza opublikowanego przy fail-open (patrz niżej). |
 | Komentarz ocenzurowany | opublikuj wersję zamaskowaną | Opublikować tekst z fragmentami zastąpionymi znakami `█` albo zostawić komentarz do ręcznej moderacji. Oryginał zostaje zachowany w danych komentarza. Komentarz dłuższy niż 3000 znaków, komentarz z formatowaniem lub odnośnikami i komentarz, którego wersja zamaskowana nie pasuje do wysłanego tekstu, zawsze zostaje do moderacji (z wersją zamaskowaną w kolumnie **Minos**). |
 | Komentarz zablokowany | zostaw do ręcznej moderacji | Zostawić do moderacji albo oznaczyć jako spam. |
 | Pokazuj informację | włączona | Informacja pod formularzem komentarza (RODO), patrz niżej. |
@@ -80,9 +85,11 @@ do bazy.
 1. Czytelnik wysyła komentarz. WordPress stosuje najpierw własne reguły (ręczne
    zatwierdzanie, słowa kluczowe, liczba odnośników, filtry antyspamowe), a wtyczka — jako
    ostatnia — **wstrzymuje** komentarz i od razu wysyła go do oceny (co wydłuża wysłanie
-   komentarza najwyżej o 10 sekund).
-2. Brama przyjmuje komentarz (HTTP 202) i odsyła werdykt później, zwykle w ciągu kilku
-   sekund, najpóźniej w ciągu 15 minut, na adres webhooka.
+   komentarza najwyżej o 10 sekund). Jeśli brama kazała właśnie poczekać, komentarz nie jest
+   wysyłany od razu, tylko po przerwie, przez WP-Cron (patrz „Fail-open i fail-closed”).
+2. Brama przyjmuje komentarz (HTTP 202) i odsyła werdykt później na adres webhooka —
+   próbuje go doręczyć przez 15 minut. Ile to trwa na Twojej stronie, pokazuje sekcja
+   „Ostatnie 7 dni” w **Ustawienia → Minos** (patrz „Dziennik i błędy”).
 3. Wtyczka sprawdza podpis i stosuje werdykt:
    - **bezpieczne** — publikuje komentarz;
    - **ocenzurowane** — publikuje wersję z zamaskowanymi fragmentami albo zostawia
@@ -128,7 +135,9 @@ Zasady, które obowiązują zawsze:
 - **Powiadomienia e-mail:** moderator nie dostaje wiadomości „komentarz czeka na
   moderację” o komentarzu, który czeka tylko na werdykt. Wiadomość przychodzi dopiero
   wtedy, gdy po werdykcie komentarz zostaje w moderacji; autor wpisu dostaje jedno
-  powiadomienie o opublikowanym komentarzu, tak jak bez wtyczki.
+  powiadomienie o opublikowanym komentarzu, tak jak bez wtyczki. To powiadomienie wysyła
+  WordPress w chwili publikacji, więc gdy publikuje werdykt, e-mail wychodzi w trakcie
+  obsługi doręczenia przez webhook (wiadomość dla moderatora wysyła WP-Cron).
 - **Zamaskowany tekst** jest publikowany jako zwykły tekst i tylko w miejsce komentarza,
   który sam jest zwykłym tekstem: wersja zamaskowana musi mieć dokładnie tyle znaków, ile
   wysłany tekst, i różnić się od niego wyłącznie znakami `█`. Komentarz z formatowaniem
@@ -153,26 +162,43 @@ Zasady, które obowiązują zawsze:
 ## Fail-open i fail-closed
 
 Komentarz nie dostaje werdyktu, gdy brama odpowie „nieocenione”, gdy werdykt nie nadejdzie
-w czasie oczekiwania albo gdy brama odrzuci komentarz z powodu błędu konfiguracji (np. zły
-klucz). Wtedy:
+w czasie oczekiwania, gdy brama odrzuci komentarz z powodu błędu konfiguracji (np. zły
+klucz) albo gdy komentarz nie ma tekstu do oceny (np. sam odnośnik bez treści albo obrazek
+bez opisu — taki komentarz nie jest wysyłany, a kolumna **Minos** podaje powód „brak tekstu
+do oceny”). Wtedy:
 
 - **fail-closed** (domyślnie) — komentarz zostaje do ręcznej moderacji;
 - **fail-open** — komentarz zostaje opublikowany (o ile WordPress sam by go opublikował).
 
-Gdy brama jest chwilowo przeciążona lub niedostępna (HTTP 429 lub 503, brak odpowiedzi),
-komentarz czeka, a wtyczka ponawia wysyłkę po czasie wskazanym przez bramę albo po rosnącej
-przerwie (1, 2, 4… minuty), aż do upływu czasu oczekiwania. Jeśli brama zapowiada, że nie
-przyjmie komentarza aż do chwili po upływie czasu oczekiwania (np. przy wyczerpanym
-dziennym limicie zapytań klucza), komentarz od razu trafia do trybu „Gdy brak werdyktu” —
-bez 20 minut czekania.
+**Ponawianie.** Gdy brama każe poczekać — odmowa HTTP 429 (limit minutowy, dzienny lub
+„w toku” klucza, wspólny limit usługi, pełna kolejka), błąd HTTP 5xx, przekroczenie czasu
+(HTTP 408) albo brak odpowiedzi — wtyczka wstrzymuje **wszystkie** wysyłki do chwili
+wskazanej przez bramę, a bez niej na rosnącą przerwę (1, 2, 4… minuty, najwyżej godzina);
+przerwa trwa najwyżej dobę, a potem wtyczka pyta bramę znowu. Zmiana klucza API, sekretu
+webhooka, adresu bramy albo wyłączenie lub włączenie moderacji kończy przerwę od razu. Limity bramy liczą zapytania, nie
+komentarze, a każda odmowa spowodowana przez klucz zużywa jego limit, więc w czasie przerwy
+nowy komentarz nie jest wysyłany przy dodaniu: czeka wstrzymany, a po przerwie WP-Cron
+wysyła zaległe komentarze razem, do 20 w jednym zapytaniu. Komentarz, którego brama nie
+wymieni w odpowiedzi jako przyjętego, jest ponawiany osobno; komentarz, który brama odrzuci
+jako wadliwy, trafia do trybu „Gdy brak werdyktu”, a pozostałe z tego zapytania są
+wysyłane ponownie od razu. Inne odmowy (np. zły klucz, brak webhooka, niedozwolony profil)
+i odpowiedź 2xx inna niż 202 (przyjęcie oznacza tylko 202) nie są ponawiane: to błąd
+konfiguracji (patrz niżej). Ponowienia trwają do upływu czasu
+oczekiwania. Jeśli brama zapowiada, że nie przyjmie komentarzy aż do chwili po upływie
+czasu oczekiwania (np. przy wyczerpanym dziennym limicie zapytań klucza), komentarz od
+razu trafia do trybu „Gdy brak werdyktu” — bez 20 minut czekania; dotyczy to także
+komentarzy dodanych w czasie takiej przerwy.
 
-**Komunikat o limicie i przeciążeniu.** Gdy brama odmówi z powodu wyczerpanego dziennego
-limitu zapytań klucza albo przeciążenia, na każdej stronie panelu (także na liście
-komentarzy i w **Ustawienia → Minos**) pojawia się komunikat, do której godziny brama nie
-przyjmuje komentarzy i co się z nimi do tego czasu dzieje. Komunikat znika o tej godzinie
-albo po pierwszym przyjętym komentarzu; nie zawiera klucza ani treści odpowiedzi bramy.
+**Komunikat o przerwie.** Dopóki trwa przerwa, na każdej stronie panelu (także na liście
+komentarzy i w **Ustawienia → Minos**) widać komunikat, do której godziny wtyczka nie
+wysyła komentarzy, dlaczego (wyczerpany dzienny limit zapytań klucza, przeciążenie bramy
+albo kod odpowiedzi bramy, np. `limit_minutowy_klucza`) i co się z nimi do tego czasu
+dzieje. Komunikat znika o tej godzinie, po pierwszym przyjętym komentarzu albo po zmianie
+klucza, sekretu, adresu bramy lub przełącznika moderacji; nie zawiera klucza ani treści
+odpowiedzi bramy.
 
-Ponowienia, limit czasu i powiadomienia e-mail działają przez WP-Cron (co 5 minut). Na
+Ponowienia, limit czasu i powiadomienia e-mail działają przez WP-Cron (co 5 minut; jeden
+przebieg wysyła najwyżej 5 zapytań, do 20 komentarzy w każdym). Na
 stronach o bardzo małym ruchu albo z wyłączonym WP-Cron (`DISABLE_WP_CRON`) ustaw
 systemowe zadanie cron wywołujące `wp-cron.php` — inaczej mogą się opóźniać.
 
@@ -212,7 +238,8 @@ Pod formularzem komentarza wtyczka pokazuje informację (domyślnie):
 > prywatności tej strony.
 
 Tekst można zmienić albo wyłączyć w ustawieniach. Nie jest pokazywany osobom, których
-komentarze nie są wysyłane (moderatorom). Uzupełnij też politykę prywatności strony
+komentarze nie są wysyłane (moderatorom), ani wtedy, gdy moderacja jest wyłączona albo
+brakuje poprawnego klucza API lub sekretu webhooka. Uzupełnij też politykę prywatności strony
 o informację o automatycznej ocenie komentarzy.
 
 **Jeśli wpisałeś własny tekst informacji, przejrzyj go.** Wtyczka go nie zmienia.
@@ -244,7 +271,16 @@ decydujesz, czy odpowiedzieć, np. z informacją o telefonie zaufania 116 123 (d
 
 ## Dziennik i błędy
 
-Strona **Ustawienia → Minos** pokazuje ostatnie błędy: czas, kod HTTP, kod błędu bramy
+**Ostatnie 7 dni.** Strona **Ustawienia → Minos** pokazuje, ile komentarzy rozstrzygniętych
+w ciągu ostatnich 7 dni dostało werdykt „bezpieczne”, „ocenzurowane” i „zablokowane”, a ile
+trafiło do trybu „Gdy brak werdyktu” (w tym ile dlatego, że werdykt nie nadszedł w czasie
+oczekiwania), oraz ile czasu mija od przyjęcia komentarza przez bramę do werdyktu: medianę
+(P50) i 95. percentyl (P95), liczone dla komentarzy ocenionych, także dla werdyktu, który
+nadszedł po publikacji przy fail-open. Liczby powstają z danych, które wtyczka i tak
+przechowuje przy komentarzach (patrz „Przechowywanie danych”), przy każdym otwarciu strony:
+bez treści komentarzy, bez dodatkowych zapytań do bramy i bez zapisywania czegokolwiek.
+
+Strona **Ustawienia → Minos** pokazuje też ostatnie błędy: czas, kod HTTP, kod błędu bramy
 i numer komentarza — nigdy treść. Gdy brama odrzuca komentarze z powodu konfiguracji
 (np. `brak_klucza`, `brak_webhooka`, `profil_niedozwolony`), w panelu pojawia się
 komunikat z podpowiedzią; znika po pierwszym przyjętym komentarzu.

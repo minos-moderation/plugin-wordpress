@@ -95,6 +95,33 @@ abstract class PluginTestCase extends TestCase
     }
 
     /**
+     * Every item the plugin sent, request after request, as `[request index, item]`.
+     *
+     * @return array<int,array{0:int,1:array<string,mixed>}> The items.
+     */
+    protected function sentItems(): array
+    {
+        $items = [];
+        foreach (WpStub::$requests as $index => $request) {
+            foreach (json_decode($request['args']['body'], true)['elementy'] as $item) {
+                $items[] = [$index, $item];
+            }
+        }
+        return $items;
+    }
+
+    /**
+     * The item ids of one request the plugin sent.
+     *
+     * @param int $index Which request (the last by default).
+     * @return array<int,string> The ids, in the request's order.
+     */
+    protected function sentIds(int $index = -1): array
+    {
+        return array_column($this->sentBody($index)['elementy'], 'id');
+    }
+
+    /**
      * Delivers a payload to the webhook, signed like the gateway signs it.
      *
      * @param array<string,mixed>|string $payload The payload, or an exact body.

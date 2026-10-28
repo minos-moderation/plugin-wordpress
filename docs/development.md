@@ -11,21 +11,22 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
 | `src/Plugin.php` | Builds the objects and hooks them into WordPress (priorities live here). |
 | `src/Platform.php` | The one adapter: every WordPress function the logic calls. |
 | `src/Settings.php` | The settings, normalised to known values; the key and secret options. |
-| `src/Submission.php` | `pre_comment_approved` → hold; `comment_post` / `rest_insert_comment` → `POST /api/v1/b2b/oceny`; the answers and the retries. |
+| `src/Submission.php` | `pre_comment_approved` → hold; `comment_post` / `rest_insert_comment` → `POST /api/v1/b2b/oceny`; the answers, the shared pause and the retries in batches of up to 20. |
 | `src/Receiver.php` | The REST webhook `minos/v1/webhook`: `404` while switched off; raw body, `Signature::verify`, `WebhookPayload::parse`, dedupe. |
 | `src/Outcome.php` | Applies a verdict (on time or late) or the failure mode; verified masked writes; the held-back moderator e-mail. |
-| `src/Sweeper.php` | WP-Cron every 5 minutes: the receive timeout and due retries. |
+| `src/Sweeper.php` | WP-Cron every 5 minutes: the receive timeout and due retries (at most 5 requests a run). |
 | `src/Retention.php` | WP-Cron hourly: the `_minos_*` meta of a comment settled 30 days ago goes (shared rule D9.11). |
 | `src/Text.php` | Plain text for the gateway (strip, keep `title`/`alt` text, block tags as line breaks, decode, trim, cut at 3000), link domains, whether a masked text fits, and back to safe HTML. |
 | `src/Upgrade.php` | Brings data an earlier version stored up to date, once per site (`minos_moderation_schema`). |
-| `src/Log.php` | The administrator's error log: codes and statuses, never content or secrets. |
+| `src/Log.php` | The administrator's error log: codes and statuses, never content or secrets; the shared pause. |
+| `src/Stats.php` | The last 7 days on the settings page: comments per outcome, P50/P95 of the time from `202` to the verdict, from the meta the plugin keeps. |
 | `src/Notice.php` | The privacy (RODO) notice under the comment form. |
 | `src/Admin/` | Settings → Minos, the "Minos" comments column and the admin notices. |
 | `src/Meta.php` | Every `_minos_*` comment meta key (all removed on uninstall). |
 | `tests/stubs/wordpress.php` | Hand-written stubs of the WordPress functions the plugin calls. |
 | `tests/Unit/` | The real handlers on the stubs. |
 | `tests/EndToEnd/` | The plugin against the mock gateway over real HTTP. |
-| `tests/Repo/` | The Claude Code rules and the PHP 7.4 syntax guard. |
+| `tests/Repo/` | The Claude Code rules (their checker also runs on `fixtures/agents/`, agents it must reject) and the PHP 7.4 syntax guard. |
 | `bin/build-zip.sh` | Builds `build/minos-moderation.zip` with `vendor/` inside. |
 | `.github/workflows/release.yml` | On a `v*` tag: builds the zip, proves it with `.github/scripts/check-release-archive.sh` and attaches it to the GitHub Release. |
 
@@ -39,21 +40,48 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
    the filter twice per comment; the last run wins.
 2. `comment_post` (priority 5, before WordPress's own notifications at 10) or, for the REST
    API which does not fire `comment_post`, `rest_insert_comment` marks it `oczekuje` and
-   sends it synchronously (`wp_remote_post`, 10 s, no redirects). The body is one item:
+   sends it synchronously (`wp_remote_post`, 10 s, no redirects), unless the shared pause
+   runs (step 3). The body in the author's request is one item:
    `{"id":"wp:<ID>","tekst":…,"profil":…,"meta":{"links":…,"link_domains":[…],"author_first_post":…}}`
    (`wp:<ID>.<n>` for the n-th revision, see below)
    (`link_domains` only when the content has links: at most 10 registrable domains, found
    with a short list of second-level suffixes instead of the Public Suffix List). A plain
    text over 3000 characters is marked `_minos_cut`.
-3. The answer: `202` → accepted; `429`, `5xx` or no answer → a retry after `ponow_za_s`
-   or a doubling backoff from 60 s (a one-off WP-Cron event, plus the sweep as a
-   fallback), but the failure mode at once when `ponow_za_s`, uncapped, ends at or after
-   the comment's receive timeout (shared rule D9.3(a)); anything else → a configuration
-   error: the failure mode, a log entry and an admin notice. A `429` with
-   `limit_dobowy_klucza` (or `limit_globalny_b2b`, `kolejka_pelna`: an overload) also
-   stores "the gateway refuses until T" (`Log::pause`, option `minos_moderation_paused`)
-   for an admin notice on every screen and the settings page; it ends at T or with the
-   first `202`.
+3. The answer (shared rule D9.6), for every comment of the request:
+   - `202` → a comment whose item id is in `przyjete` is accepted; any other is retried
+     after its own backoff, and the others are not held up.
+   - `429` (any code), `408` (as no answer), `5xx` or no answer → the shared pause
+     (`Log::pause`, option `minos_moderation_paused`): nothing is sent until the gateway's
+     `ponow_za_s` or, without it, a doubling backoff from 60 s (at most an hour, counted
+     from the most failed attempts in the request) ends, and never more than a day
+     (`Log::MAX_PAUSE_S`): while nothing is sent no `202` can end it. Each comment of the
+     request is retried then (a one-off WP-Cron event, plus the sweep as a fallback), but
+     gets the failure mode at once when `ponow_za_s` as given (clamped at a year only to
+     stay an integer) ends at or after its receive timeout (shared rule D9.3(a)). A pause
+     running longer is never shortened by the answer to an earlier request; it ends with
+     the first `202` that takes a comment, or when the administrator changes the key, the
+     secret, the gateway's address or the switch (`Submission::onSettingsSaved`,
+     `onCredentialsSaved`).
+   - a refusal of one item (`blad.element` with `brak_tekstu`, `limit_dlugosci`,
+     `bledny_identyfikator` or `powtorzony_identyfikator`) → that comment gets the failure
+     mode, and the others are sent again at once (the gateway took none of them, and such
+     a refusal costs the key nothing).
+   - anything else → a configuration error for every comment of the request: the failure
+     mode, a log entry and an admin notice. That includes a `2xx` other than `202`, even
+     one with every item in `przyjete`: only `202` accepts.
+
+   While the pause runs, a new or edited comment is not sent in the author's or editor's
+   request: it stays held with its retry due when the pause ends, or gets the failure mode
+   at once when the gateway's own `ponow_za_s` ends at or after its timeout (the plugin's
+   backoff never does that). A retry event sends its comment first, with the other due
+   ones, up to 20 items a request (`Submission::MAX_ITEMS`); the sweep sends due retries
+   in at most `Sweeper::MAX_REQUESTS` (5) HTTP requests, a request sent again after a
+   refused item counted too (a retry event: one). Both stop at the first answer that asks
+   to wait, and both find the due retries by the meta key `_minos_retry_at` alone (set
+   until the `202` or the settlement), so comments that only wait for their verdict never
+   crowd them out. Every pause is shown until T on every admin screen and the settings
+   page: a daily limit (`limit_dobowy_klucza`) and an overload (`limit_globalny_b2b`,
+   `kolejka_pelna`) with their own words, any other with its code.
 4. The webhook applies the verdict to a comment still marked `oczekuje`, or to one the
    plugin published under fail-open (`_minos_auto_published`), when the verdict is for the
    comment's current revision (`_minos_revision`) and the comment still reads as the text
@@ -65,7 +93,8 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
    20 minutes), counted from the gateway's `202`, or from the hold while it was never
    accepted. It finds waiting comments by the meta key `_minos_waiting` alone, set while a
    comment waits and removed when it is settled, never by a meta value (`_minos_status`
-   stays, and grows with every comment ever assessed).
+   stays, and grows with every comment ever assessed), and the due retries by
+   `_minos_retry_at` alone (step 3).
 
 With `enabled` off the plugin does nothing: no hold, no submission, no retry, no sweep, and
 the webhook answers `404`. Waiting comments stay in WordPress's queue for a person. Only the
@@ -105,6 +134,11 @@ Decisions worth knowing before changing anything:
   taken out, and drops inline tags without a trace: `<blockquote>Zgoda</blockquote>zakazane`
   is sent as two words, `zak<b>a</b>zane` as one. The changed text changes the hash of
   comments in flight during an update; their verdicts then send the next revision instead.
+- **No text to assess is the failure mode** (shared rule D9.5). A comment whose plain text
+  is empty (a link with a blank text, an image without `alt`) is held and gets the failure
+  mode at once, without a request, with `_minos_error` `brak_tekstu_do_oceny` (the plugin's
+  own code, not the gateway's `brak_tekstu`) shown in the "Minos" column; under fail-open
+  the publication is marked as one without an assessment.
 - **The plain text never goes empty by accident.** An empty text gets the failure mode,
   so a regex in `Text` that gives up (a PCRE limit returns null) falls back to its input,
   and trimming is a byte scan over the 26 characters PCRE calls whitespace, not a regex
@@ -134,7 +168,12 @@ Decisions worth knowing before changing anything:
   only after a `202`, so the comment keeps waiting: the next sweep repeats a time-out or a
   submission, and the webhook answers `500`, so the gateway's next delivery of the verdict
   is applied rather than dropped as a repeat. A masked text written before a hook threw is
-  recognised on that redelivery (`_minos_original` is the text that was sent).
+  recognised on that redelivery (`_minos_original` is the text that was sent). In a
+  request that carries several comments, one that fails while its item is built is left
+  out of it; a request that fails on the way (another plugin's HTTP hook) leaves every
+  comment it carried due, recorded once under its first comment
+  (`Outcome::failedTogether`), and the next request of the pass goes on. The stubbed
+  `get_comment` runs core's `get_comment` filter, so a test can make one comment fail.
 - **Slashes.** `wp_update_comment` and `update_comment_meta` unslash their input, so
   `Platform` slashes it; the stubs unslash too, and a test holds a backslash.
 - **Notifications.** A `notify_moderator` filter suppresses the "awaiting moderation" e-mail
@@ -149,8 +188,13 @@ Decisions worth knowing before changing anything:
   `_minos_decided_at` by value (`meta_compare` `<`), once an hour, over the comments of the
   last 30 days; a reopened revision loses the key until its own verdict. `Upgrade` step 3
   dates comments settled before the update from `_minos_held_at`.
-- **Not done:** batching several comments into one request (every request carries one
-  item); translation files (the source strings are Polish, in `__()` with the
+- **Queries by meta value.** Only `Retention` (hourly), `Upgrade` (once per site) and the
+  settings page's 7-day numbers (`Stats`, each time an administrator opens Settings →
+  Minos; `_minos_decided_at` ≥ a week ago, at most 2000 comments, their meta primed in one
+  query) ask by a meta value. What runs often asks by the meta key alone, which WordPress indexes: the
+  sweep and the retry events (`_minos_waiting`, `_minos_retry_at`) and the support notice on the comments screen
+  (every view, `_minos_wsparcie`, written only as `1`, with the comment date for the 7 days).
+- **Not done:** translation files (the source strings are Polish, in `__()` with the
   `minos-moderation` domain, and `languages/` is loaded when present).
 
 ## WordPress APIs
@@ -165,7 +209,7 @@ setting the request body from `php://input`, `WP_REST_Request::get_body()` and
 `WP_REST_Response`, `rest_url`, `wp_remote_post` / `wp_remote_retrieve_*` / `is_wp_error`,
 `wp_schedule_single_event`, `wp_schedule_event`, `wp_next_scheduled`, `wp_unschedule_hook`,
 the `cron_schedules` filter, `get_comment`, `get_comments` (`status => any`, meta, `count`,
-`user_id`, `author_email`, `date_query`), `get_comment_meta` / `update_comment_meta` /
+`user_id`, `author_email`, `date_query`, `update_comment_meta_cache`), `get_comment_meta` / `update_comment_meta` /
 `delete_comment_meta` / `delete_metadata`, `wp_set_comment_status` (false when nothing
 changed; approval mails the post's author), `transition_comment_status`,
 `wp_update_comment` (unslashes; returns `1`/`0`, or `false`/`WP_Error`; runs
@@ -203,7 +247,8 @@ built-in server for the end-to-end test.
 - **Unit** (`tests/Unit/`): `PluginTestCase` hooks the real `Plugin` into the stubs with a
   fixed clock. `WpStub::postComment()` runs the filter, the insert and `comment_post` as
   `wp_new_comment` does; `deliver()` signs a payload with `Signature::sign` and calls the
-  real receiver; `WpStub::answer()` queues the gateway's answers; every HTTP request,
+  real receiver; `WpStub::answer()` queues the gateway's answers (by default a `202`
+  naming every item of the request in `przyjete`); every HTTP request,
   status change, cron event and e-mail is recorded in `WpStub`.
 - **End to end** (`tests/EndToEnd/`): the mock gateway from
   `vendor/minos-moderation/client-php/mock-gateway` on one built-in server, a stand-in site

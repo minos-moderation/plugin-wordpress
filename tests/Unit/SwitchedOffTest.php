@@ -91,10 +91,8 @@ final class SwitchedOffTest extends PluginTestCase
 
         do_action(Sweeper::HOOK);
 
-        $sent = array_map(static function (array $request): string {
-            return json_decode($request['args']['body'], true)['elementy'][0]['id'];
-        }, array_slice(WpStub::$requests, $requests));
-        self::assertSame(['wp:' . $accepted . '.1', 'wp:' . $retrying . '.1'], $sent);
+        self::assertCount($requests + 1, WpStub::$requests, 'together, in one request');
+        self::assertSame(['wp:' . $accepted . '.1', 'wp:' . $retrying . '.1'], $this->sentIds());
         foreach ([$accepted, $retrying] as $id) {
             self::assertTrue($this->pending($id), 'not published unassessed');
             self::assertSame('0', $this->field($id, 'comment_approved'));

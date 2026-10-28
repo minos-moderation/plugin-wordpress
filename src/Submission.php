@@ -33,10 +33,21 @@ defined('ABSPATH') || exit;
  * it again as its next revision, `wp:<id>.<n>`; a published one goes back to hold while
  * the new text is assessed. An edit of a comment the gateway assessed is a person's
  * decision and is not sent.
+ *
+ * The gateway's limits count requests, not items, and a refusal the key caused spends its
+ * allowance. So an answer that asks to wait (`429`, `408`, `5xx`, no answer) pauses every
+ * submission until its `ponow_za_s`, or the backoff, ends ({@see Log::sendingPause}): a
+ * comment written meanwhile is held for WP-Cron instead of being sent in its author's
+ * request. The retries then go out together, up to {@see MAX_ITEMS} comments a request,
+ * and only the comments the `202` names in `przyjete` count as accepted.
  */
 final class Submission
 {
-    /** The WP-Cron action that retries one comment after a `429`, a `503` or no answer. */
+    /**
+     * The WP-Cron action that retries a comment after a `429`, a `408`, a `5xx` or no
+     * answer, or after the pause the gateway asked for; the request carries the other due
+     * comments too.
+     */
     public const HOOK_RETRY = 'minos_moderation_retry';
 
     /** The gateway's B2B route. */
@@ -52,10 +63,26 @@ final class Submission
     public const MAX_BACKOFF_S = 3600;
 
     /**
+     * The longest `ponow_za_s` taken as given: a year, longer than any receive timeout and
+     * any pause the plugin keeps, short enough that adding it to the clock stays an integer.
+     */
+    private const MAX_ASKED_S = 365 * 86400;
+
+    /**
      * The most waiting comments switching the plugin on again sends again (a day of the
      * paid plan's limit); any beyond keep their old timeout.
      */
     public const RESUME_BATCH = 1000;
+
+    /** The most items one request carries (the contract's batch). */
+    public const MAX_ITEMS = 20;
+
+    /**
+     * Refusals of one item of a request (`blad.element`), for a fault of that item alone:
+     * that comment gets the failure mode, and the others are sent again. Any other refusal
+     * names the key's setup (a profile, the webhook), so it is every item's.
+     */
+    private const ITEM_CODES = ['brak_tekstu', 'limit_dlugosci', 'bledny_identyfikator', 'powtorzony_identyfikator'];
 
     /** The comment types the plugin moderates ('' is the legacy spelling of a comment). */
     private const TYPES = ['comment', ''];
@@ -189,7 +216,8 @@ final class Submission
      * `update_option_{settings}` action: switching moderation on again sends what was
      * waiting when it was switched off, each as its next revision with a fresh receive
      * timeout (shared rule D9.13), from WP-Cron rather than in the administrator's request.
-     * A comment a person decided on meanwhile is left to that decision.
+     * A comment a person decided on meanwhile is left to that decision. Switching it off or
+     * on, or another gateway address, also ends the gateway's pause ({@see Log::endPause}).
      *
      * @param mixed $old The settings before.
      * @param mixed $new The settings now.
@@ -197,9 +225,12 @@ final class Submission
      */
     public function onSettingsSaved($old, $new): void
     {
-        $was = Settings::normalise(is_array($old) ? $old : [])['enabled'];
-        $is = Settings::normalise(is_array($new) ? $new : [])['enabled'];
-        if ($was || !$is) {
+        $before = Settings::normalise(is_array($old) ? $old : []);
+        $after = Settings::normalise(is_array($new) ? $new : []);
+        if ($before['enabled'] !== $after['enabled'] || $before['gateway_url'] !== $after['gateway_url']) {
+            $this->log->endPause();
+        }
+        if ($before['enabled'] || !$after['enabled']) {
             return;
         }
         foreach ($this->wp->pendingCommentIds(self::RESUME_BATCH) as $id) {
@@ -211,6 +242,22 @@ final class Submission
                 // Left waiting: the sweep gives it the failure mode once its old timeout is past.
                 $this->outcome->failed(Log::STEP_SUBMIT, $id);
             }
+        }
+    }
+
+    /**
+     * `update_option_{key}` and `update_option_{secret}` actions (WordPress fires them only
+     * on a change): another key may have other limits, so the gateway's pause, which
+     * answered the old one, ends.
+     *
+     * @param mixed $old The value before.
+     * @param mixed $new The value now.
+     * @return void
+     */
+    public function onCredentialsSaved($old, $new): void
+    {
+        if ($old !== $new) {
+            $this->log->endPause();
         }
     }
 
@@ -285,7 +332,10 @@ final class Submission
     }
 
     /**
-     * {@see HOOK_RETRY} action: a retry that fell due.
+     * {@see HOOK_RETRY} action: a retry that fell due. The comment goes first in a request
+     * that also carries the other waiting comments whose retry is due, up to
+     * {@see MAX_ITEMS}: the gateway's limits count requests, not items, so the comments
+     * held during one pause go out together. Their own events then find nothing to send.
      *
      * @param int|string $commentId The comment.
      * @return void
@@ -294,15 +344,51 @@ final class Submission
     {
         $id = (int)$commentId;
         try {
-            $retryAt = $this->wp->meta($id, Meta::RETRY_AT);
-            if ($this->wp->meta($id, Meta::STATUS) === Meta::PENDING && $retryAt !== ''
-                && (int)$retryAt <= $this->wp->now() && !$this->pastDeadline($id)) {
-                $this->submit($id);
+            if ($this->due($id)) {
+                $this->sendDue($this->dueWith($id), 1);
             }
         } catch (\Throwable $e) {
             // The retry stays due, so the sweep sends it; WP-Cron's other events still run.
             $this->outcome->failed(Log::STEP_SUBMIT, $id);
         }
+    }
+
+    /**
+     * Whether a waiting comment's retry fell due, before its receive timeout.
+     *
+     * @param int $id The comment.
+     * @return bool The answer.
+     */
+    public function due(int $id): bool
+    {
+        $retryAt = $this->wp->meta($id, Meta::RETRY_AT);
+        return $this->wp->meta($id, Meta::STATUS) === Meta::PENDING && $retryAt !== ''
+            && (int)$retryAt <= $this->wp->now() && !$this->pastDeadline($id);
+    }
+
+    /**
+     * A comment whose retry fell due, then the other waiting comments whose retry is due,
+     * oldest first, up to {@see MAX_ITEMS}.
+     *
+     * @param int $id The comment.
+     * @return array<int,int> Comment ids.
+     */
+    private function dueWith(int $id): array
+    {
+        $ids = [$id];
+        foreach ($this->wp->retryCommentIds(Sweeper::BATCH) as $other) {
+            if (count($ids) >= self::MAX_ITEMS) {
+                break;
+            }
+            try {
+                if ($other !== $id && $this->due($other)) {
+                    $ids[] = $other;
+                }
+            } catch (\Throwable $e) {
+                // Left to its own event or to the sweep.
+            }
+        }
+        return $ids;
     }
 
     /**
@@ -333,33 +419,138 @@ final class Submission
     }
 
     /**
-     * Sends one pending comment and records what the gateway answered.
+     * Sends one pending comment at once, in the request of the person who wrote or edited
+     * it, and records what the gateway answered. While the gateway asked to wait
+     * ({@see Log::sendingPause}), nothing is sent: the comment stays held for WP-Cron, which
+     * sends it once the pause ends.
      *
      * @param int $id The comment.
-     * @return string {@see ACCEPTED}, {@see RETRY}, {@see REFUSED} or {@see SKIPPED}.
+     * @return string {@see ACCEPTED}, {@see RETRY} (it waits, or its wait could not end in
+     *     time), {@see REFUSED} (the failure mode applied) or {@see SKIPPED} (not pending,
+     *     or the plugin is off).
      */
     public function submit(int $id): string
     {
         if (!$this->settings->all()['enabled']) {
             return self::SKIPPED;
         }
+        $comment = $this->assessable($id);
+        if ($comment === null) {
+            return $this->wp->meta($id, Meta::STATUS) === Meta::PENDING ? self::SKIPPED : self::REFUSED;
+        }
+        $pause = $this->log->sendingPause();
+        if ($pause !== null) {
+            $this->wait($id, $pause);
+            return self::RETRY;
+        }
+        $budget = 1;
+        return $this->sendBatch([$this->entry($comment)], $budget);
+    }
+
+    /**
+     * Sends comments whose retry fell due (the sweep, a retry event), in requests of at most
+     * {@see MAX_ITEMS}, and stops at the first answer that asks to wait. While a pause runs,
+     * nothing is sent: each comment is held until it ends, or gets the failure mode at once
+     * when the gateway's pause ends after its receive timeout (shared rule D9.3(a)).
+     *
+     * One comment that fails while its item is built (another plugin's hook throwing) is left
+     * out of the request and stays due; one request that fails while it is sent leaves its
+     * comments due, and the next request goes on. The failure is recorded by step and
+     * comment id ({@see Outcome::failed}), never by its message.
+     *
+     * @param array<int,int> $ids         Comments whose retry is due, in the order to send.
+     * @param int            $maxRequests The most HTTP requests to send, a request sent again
+     *     after one refused item included.
+     * @return void
+     */
+    public function sendDue(array $ids, int $maxRequests): void
+    {
+        if ($ids === [] || !$this->settings->all()['enabled']) {
+            return;
+        }
+        $pause = $this->log->sendingPause();
+        if ($pause !== null) {
+            foreach ($ids as $id) {
+                try {
+                    if ($this->wp->meta($id, Meta::STATUS) === Meta::PENDING) {
+                        $this->wait($id, $pause);
+                    }
+                } catch (\Throwable $e) {
+                    $this->outcome->failed(Log::STEP_SUBMIT, $id);
+                }
+            }
+            return;
+        }
+        $ids = array_values($ids);
+        $last = count($ids) - 1;
+        $batch = [];
+        $budget = $maxRequests;
+        foreach ($ids as $index => $id) {
+            if ($budget <= 0) {
+                return;
+            }
+            try {
+                $comment = $this->assessable($id);
+                if ($comment !== null) {
+                    $batch[] = $this->entry($comment);
+                }
+            } catch (\Throwable $e) {
+                // Left out of the request; its retry stays due for the next pass.
+                $this->outcome->failed(Log::STEP_SUBMIT, $id);
+            }
+            if ($batch === [] || (count($batch) < self::MAX_ITEMS && $index < $last)) {
+                continue;
+            }
+            $answer = $this->sendBatchIsolated($batch, $budget);
+            $batch = [];
+            if ($answer === self::RETRY) {
+                return;
+            }
+        }
+    }
+
+    /**
+     * A pending comment that can be sent, or null when nothing is to be sent: it is gone or
+     * not pending (left as it is), or there is nothing to assess it with or nothing to
+     * assess (the failure mode at once; no verdict, no guess).
+     *
+     * @param int $id The comment.
+     * @return object|null The `WP_Comment`.
+     */
+    private function assessable(int $id): ?object
+    {
         $comment = $this->wp->comment($id);
         if ($comment === null || $this->wp->meta($id, Meta::STATUS) !== Meta::PENDING) {
-            return self::SKIPPED;
+            return null;
         }
-        $key = $this->settings->apiKey();
-        $plain = Text::plain((string)$comment->comment_content);
-        $text = Text::cut($plain);
         if (!$this->settings->usable()) {
             // Nothing to assess it with, nor to check its verdict: no verdict, no guess.
             $this->outcome->withoutVerdict($id, Meta::ERROR_NOT_CONFIGURED);
-            return self::REFUSED;
+            return null;
         }
-        if ($text === '') {
-            // Nothing to assess: no verdict, no guess.
-            $this->outcome->withoutVerdict($id, null);
-            return self::REFUSED;
+        $plain = Text::plain((string)$comment->comment_content);
+        if (Text::cut($plain) === '') {
+            // Nothing to assess (a link with a blank text, an image without alternative
+            // text): no request, no verdict, no guess - the failure mode at once (shared
+            // rule D9.5), with the reason for the moderator.
+            $this->outcome->withoutVerdict($id, Meta::ERROR_NO_TEXT);
+            return null;
         }
+        return $comment;
+    }
+
+    /**
+     * Records what is about to be sent for a comment (the cut, the length and the hash of
+     * the text) and builds its item.
+     *
+     * @param object $comment A comment {@see assessable} returned.
+     * @return array{id:int,item:array<string,mixed>} The comment's id and its item.
+     */
+    private function entry(object $comment): array
+    {
+        $id = (int)$comment->comment_ID;
+        $plain = Text::plain((string)$comment->comment_content);
+        $text = Text::cut($plain);
         if (Text::isCut($plain)) {
             $this->wp->setMeta($id, Meta::CUT, '1');
         } else {
@@ -367,15 +558,27 @@ final class Submission
         }
         $this->wp->setMeta($id, Meta::SENT_CHARS, mb_strlen($text, 'UTF-8'));
         $this->wp->setMeta($id, Meta::SENT_HASH, hash('sha256', $text));
+        return ['id' => $id, 'item' => $this->item($comment, $text)];
+    }
 
-        $answer = $this->wp->post(
-            $this->settings->all()['gateway_url'] . self::PATH,
-            ['Content-Type' => 'application/json', 'X-Gateway-Key' => $key],
-            (string)json_encode(['elementy' => [$this->item($comment, $text)]],
-                JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-            self::TIMEOUT_S
-        );
-        return $this->handleAnswer($id, $answer['status'], $answer['body']);
+    /**
+     * Holds a comment while the gateway's pause runs: its retry falls due when the pause
+     * ends. When the gateway itself said until when it refuses and that is at or after the
+     * comment's receive timeout, no verdict can come in time: the failure mode applies at
+     * once (shared rule D9.3(a)), with the refusal that made the wait hopeless.
+     *
+     * @param int                                           $id    The comment.
+     * @param array{until:int,code:string|null,given:bool} $pause The pause.
+     * @return void
+     */
+    private function wait(int $id, array $pause): void
+    {
+        if ($pause['given'] && $pause['until'] >= $this->deadline($id)) {
+            $this->outcome->timedOut($id, $pause['code']);
+            return;
+        }
+        $this->wp->setMeta($id, Meta::RETRY_AT, $pause['until']);
+        $this->wp->scheduleOnce($pause['until'], self::HOOK_RETRY, [$id]);
     }
 
     /**
@@ -464,66 +667,210 @@ final class Submission
     }
 
     /**
-     * Records the gateway's answer.
+     * {@see sendBatch} where an exception must not escape (WP-Cron): a request that fails
+     * on the way (another plugin's HTTP hook throwing) leaves every comment it carried due,
+     * recorded once under the first comment's id and on each comment.
      *
-     * - `202`: accepted; the verdict will come to the webhook.
-     * - `429`, `5xx` or no answer: kept pending, retried after `ponow_za_s` or a doubling
-     *   backoff; but when the gateway's `ponow_za_s`, as given, ends at or after the
-     *   comment's receive timeout, no verdict can come in time and the failure mode applies
-     *   at once (shared rule D9.3(a)). A daily limit or an overload is also kept for the
-     *   administrator's notice ({@see Log::pause}).
-     * - anything else: a configuration error (the key, the webhook, the URL); retrying will
-     *   not help, so the failure mode applies and the administrator is told.
-     *
-     * @param int         $id     The comment.
-     * @param int|null    $status The HTTP status, or null when no answer came.
-     * @param string      $body   The answer's body.
-     * @return string {@see ACCEPTED}, {@see RETRY} (the gateway asked to wait, whether the
-     *     comment waits or its wait could not end in time) or {@see REFUSED}.
+     * @param array<int,array{id:int,item:array<string,mixed>}> $entries The comments and their items.
+     * @param int                                               $budget  HTTP requests left; each one sent counts.
+     * @return string What {@see sendBatch} answered, or {@see REFUSED} when it failed.
      */
-    private function handleAnswer(int $id, ?int $status, string $body): string
+    private function sendBatchIsolated(array $entries, int &$budget): string
     {
-        if ($status === 202) {
-            $this->wp->setMeta($id, Meta::SUBMITTED_AT, $this->wp->now());
-            // Removed only now: a request that fails on the way leaves the retry due.
-            $this->wp->deleteMeta($id, Meta::RETRY_AT);
-            $this->wp->deleteMeta($id, Meta::ATTEMPTS);
-            $this->log->clearConfigError();
-            return self::ACCEPTED;
+        try {
+            return $this->sendBatch($entries, $budget);
+        } catch (\Throwable $e) {
+            $this->outcome->failedTogether(Log::STEP_SUBMIT, array_column($entries, 'id'));
+            return self::REFUSED;
         }
-        $error = self::error($body);
-        $this->log->record($id, $status, $error['kod']);
-        if ($status === null || $status === 429 || $status >= 500) {
-            $asked = $error['asked_s'];
-            if ($asked !== null) {
-                $this->log->pause($error['kod'], $this->wp->now() + $asked);
-                if ($this->wp->now() + $asked >= $this->deadline($id)) {
-                    // The gateway refuses until after this comment's time-out: waiting
-                    // for it changes nothing but the 20 minutes.
-                    $this->outcome->timedOut($id, $error['kod'] ?? 'http_' . (int)$status);
-                    return self::RETRY;
-                }
+    }
+
+    /**
+     * One request with the given items, and what its answer means for each comment. A
+     * refusal of one item alone (`blad.element`, for a fault of that item) gives that
+     * comment the failure mode and sends the others again at once: the gateway took none
+     * of them, and such a refusal costs the key nothing.
+     *
+     * @param array<int,array{id:int,item:array<string,mixed>}> $entries 1-{@see MAX_ITEMS} comments and their items.
+     * @param int                                               $budget  HTTP requests left; each one sent counts,
+     *     and the comments not sent for want of it stay due.
+     * @return string {@see ACCEPTED} (the gateway took at least one), {@see RETRY} (it asked
+     *     to wait, or took none) or {@see REFUSED}.
+     */
+    private function sendBatch(array $entries, int &$budget): string
+    {
+        while ($budget > 0) {
+            $budget--;
+            $answer = $this->wp->post(
+                $this->settings->all()['gateway_url'] . self::PATH,
+                ['Content-Type' => 'application/json', 'X-Gateway-Key' => $this->settings->apiKey()],
+                (string)json_encode(['elementy' => array_column($entries, 'item')],
+                    JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                self::TIMEOUT_S
+            );
+            $rest = $this->handleAnswer($entries, $answer['status'], $answer['body']);
+            if (!is_array($rest)) {
+                return $rest;
             }
-            $attempts = (int)$this->wp->meta($id, Meta::ATTEMPTS) + 1;
-            $pause = $error['ponow_za_s'] ?? min(self::MAX_BACKOFF_S, self::FIRST_BACKOFF_S * 2 ** min(20, $attempts - 1));
-            $at = $this->wp->now() + $pause;
-            $this->wp->setMeta($id, Meta::ATTEMPTS, $attempts);
-            $this->wp->setMeta($id, Meta::RETRY_AT, $at);
-            $this->wp->scheduleOnce($at, self::HOOK_RETRY, [$id]);
-            return self::RETRY;
+            $entries = $rest;
         }
-        $this->log->configError($status, $error['kod']);
-        $this->outcome->withoutVerdict($id, $error['kod'] ?? 'http_' . $status);
+        // Out of requests after a refused item: the others stay due for the next pass.
         return self::REFUSED;
     }
 
     /**
-     * The code and the retry pause of a refusal, `{"blad": {"kod", "ponow_za_s"?}}`.
+     * Records the gateway's answer for every comment of a request.
+     *
+     * - `202`: each comment whose item id is in `przyjete` is accepted (its verdict will
+     *   come to the webhook); any other is retried after its own backoff (shared rule D9.6:
+     *   only `202` with the item in it accepts). Any acceptance ends the refusal pause.
+     * - `429`, `5xx`, `408` (a timeout on the way, as no answer) or no answer: every
+     *   submission waits until the gateway's `ponow_za_s`
+     *   or, without it, a doubling backoff ends ({@see Log::pause}); each comment of the
+     *   request is retried then, but when the gateway's `ponow_za_s`, as given, ends at or
+     *   after the comment's receive timeout, no verdict can come in time and the failure
+     *   mode applies at once (shared rule D9.3(a)).
+     * - a refusal of one item (`blad.element`, for an id, a text or a length): that comment
+     *   gets the failure mode; the others are returned, to be sent again.
+     * - anything else: a configuration error (the key, the webhook, the URL, the profile, or
+     *   a `2xx` other than `202`: something in front of the gateway answered, and only `202`
+     *   accepts); retrying will not help, so the failure mode applies and the administrator
+     *   is told.
+     *
+     * @param array<int,array{id:int,item:array<string,mixed>}> $entries The comments and their items.
+     * @param int|null                                          $status  The HTTP status, or null when no answer came.
+     * @param string                                            $body    The answer's body.
+     * @return string|array<int,array{id:int,item:array<string,mixed>}> {@see ACCEPTED},
+     *     {@see RETRY} or {@see REFUSED}; or the comments to send again.
+     */
+    private function handleAnswer(array $entries, ?int $status, string $body)
+    {
+        if ($status === 202) {
+            return $this->accept($entries, $body);
+        }
+        $error = self::error($body);
+        $code = $error['kod'] ?? 'http_' . (int)$status;
+        $element = $error['element'];
+        $wait = $status === null || $status === 408 || $status === 429 || $status >= 500;
+        if (!$wait && $element !== null && isset($entries[$element]) && in_array($code, self::ITEM_CODES, true)) {
+            // One request, one log entry: under the comment it refused.
+            $this->log->record($entries[$element]['id'], $status, $error['kod']);
+            $this->outcome->withoutVerdict($entries[$element]['id'], $code);
+            unset($entries[$element]);
+            return $entries === [] ? self::REFUSED : array_values($entries);
+        }
+        $this->log->record($entries[0]['id'], $status, $error['kod']);
+        if ($wait) {
+            $this->waitForGateway($entries, $status, $error);
+            return self::RETRY;
+        }
+        $this->log->configError($status, $error['kod']);
+        foreach ($entries as $entry) {
+            $this->outcome->withoutVerdict($entry['id'], $code);
+        }
+        return self::REFUSED;
+    }
+
+    /**
+     * A `202`: the comments in `przyjete` wait for their verdicts; the others are retried.
+     *
+     * @param array<int,array{id:int,item:array<string,mixed>}> $entries The comments and their items.
+     * @param string                                            $body    The answer's body.
+     * @return string {@see ACCEPTED} when the gateway took any, {@see RETRY} when none.
+     */
+    private function accept(array $entries, string $body): string
+    {
+        $decoded = json_decode($body, true);
+        $taken = is_array($decoded) && is_array($decoded['przyjete'] ?? null) ? $decoded['przyjete'] : [];
+        $left = [];
+        foreach ($entries as $entry) {
+            $id = $entry['id'];
+            if (!in_array($entry['item']['id'], $taken, true)) {
+                $left[] = $id;
+                continue;
+            }
+            $this->wp->setMeta($id, Meta::SUBMITTED_AT, $this->wp->now());
+            // Removed only now: a request that fails on the way leaves the retry due.
+            $this->wp->deleteMeta($id, Meta::RETRY_AT);
+            $this->wp->deleteMeta($id, Meta::ATTEMPTS);
+        }
+        if (count($left) < count($entries)) {
+            $this->log->clearConfigError();
+        }
+        if ($left !== []) {
+            // Not taken: each is retried after its own backoff; one log entry a request.
+            $this->log->record($left[0], 202, null);
+            foreach ($left as $id) {
+                $this->retryAfter($id, self::backoff((int)$this->wp->meta($id, Meta::ATTEMPTS) + 1));
+            }
+        }
+        return count($left) < count($entries) ? self::ACCEPTED : self::RETRY;
+    }
+
+    /**
+     * An answer that asks to wait: the pause every submission keeps, and each comment's
+     * retry, or its failure mode at once when the gateway refuses until after its timeout.
+     *
+     * @param array<int,array{id:int,item:array<string,mixed>}>             $entries The comments and their items.
+     * @param int|null                                                       $status  The HTTP status, or null.
+     * @param array{kod:string|null,ponow_za_s:int|null,asked_s:int|null,element:int|null} $error What the refusal said.
+     * @return void
+     */
+    private function waitForGateway(array $entries, ?int $status, array $error): void
+    {
+        $attempts = 0;
+        foreach ($entries as $entry) {
+            $attempts = max($attempts, (int)$this->wp->meta($entry['id'], Meta::ATTEMPTS) + 1);
+        }
+        $pause = $error['ponow_za_s'] ?? self::backoff($attempts);
+        $asked = $error['asked_s'];
+        $this->log->pause($error['kod'], $this->wp->now() + ($asked ?? $pause), $asked !== null);
+        foreach ($entries as $entry) {
+            $id = $entry['id'];
+            if ($asked !== null && $this->wp->now() + $asked >= $this->deadline($id)) {
+                // The gateway refuses until after this comment's time-out: waiting for it
+                // changes nothing but the 20 minutes.
+                $this->outcome->timedOut($id, $error['kod'] ?? 'http_' . (int)$status);
+                continue;
+            }
+            $this->retryAfter($id, $pause);
+        }
+    }
+
+    /**
+     * Counts a failed attempt and schedules the comment's next one.
+     *
+     * @param int $id      The comment.
+     * @param int $pauseS  Seconds until the next attempt.
+     * @return void
+     */
+    private function retryAfter(int $id, int $pauseS): void
+    {
+        $at = $this->wp->now() + $pauseS;
+        $this->wp->setMeta($id, Meta::ATTEMPTS, (int)$this->wp->meta($id, Meta::ATTEMPTS) + 1);
+        $this->wp->setMeta($id, Meta::RETRY_AT, $at);
+        $this->wp->scheduleOnce($at, self::HOOK_RETRY, [$id]);
+    }
+
+    /**
+     * The retry pause without the gateway's `ponow_za_s`: a minute, doubling, at most an hour.
+     *
+     * @param int $attempts The failed attempts so far, this one included.
+     * @return int Seconds.
+     */
+    private static function backoff(int $attempts): int
+    {
+        return min(self::MAX_BACKOFF_S, self::FIRST_BACKOFF_S * 2 ** min(20, max(0, $attempts - 1)));
+    }
+
+    /**
+     * The code, the retry pause and the item of a refusal,
+     * `{"blad": {"kod", "ponow_za_s"?, "element"?}}`.
      *
      * @param string $body The answer's body.
-     * @return array{kod:string|null,ponow_za_s:int|null,asked_s:int|null} What
-     *     could be read: the pause the plugin waits (capped at a day) and the one the
-     *     gateway gave.
+     * @return array{kod:string|null,ponow_za_s:int|null,asked_s:int|null,element:int|null} What
+     *     could be read: the pause the plugin waits (capped at a day), the one the gateway
+     *     gave, and the position of the item the refusal is about.
      */
     private static function error(string $body): array
     {
@@ -531,11 +878,14 @@ final class Submission
         $error = is_array($decoded) && is_array($decoded['blad'] ?? null) ? $decoded['blad'] : [];
         $code = is_string($error['kod'] ?? null) ? Log::safeCode($error['kod']) : null;
         $retry = $error['ponow_za_s'] ?? null;
-        $asked = is_int($retry) && $retry > 0 ? $retry : null;
+        // Clamped far beyond any timeout and any pause, so the arithmetic stays in integers.
+        $asked = is_int($retry) && $retry > 0 ? min($retry, self::MAX_ASKED_S) : null;
+        $element = $error['element'] ?? null;
         return [
             'kod'        => $code,
             'ponow_za_s' => $asked === null ? null : min($asked, 86400),
             'asked_s'    => $asked,
+            'element'    => is_int($element) && $element >= 0 ? $element : null,
         ];
     }
 }

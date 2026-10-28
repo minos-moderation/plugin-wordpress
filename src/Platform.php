@@ -247,6 +247,28 @@ class Platform
     }
 
     /**
+     * Comments with a retry on the way, oldest first: by the meta key alone
+     * ({@see Meta::RETRY_AT}, set from a failed or held attempt until the gateway's `202`
+     * or the comment is settled), never by a meta value. Comments that only wait for their
+     * verdict do not have it, so they never crowd the due retries out of the window.
+     *
+     * @param int $limit The most to return.
+     * @return array<int,int> Comment ids.
+     */
+    public function retryCommentIds(int $limit): array
+    {
+        $ids = get_comments([
+            'status'   => 'any',
+            'meta_key' => Meta::RETRY_AT,
+            'fields'   => 'ids',
+            'number'   => $limit,
+            'orderby'  => 'comment_ID',
+            'order'    => 'ASC',
+        ]);
+        return array_map('intval', is_array($ids) ? $ids : []);
+    }
+
+    /**
      * Comments settled before a moment ({@see Meta::DECIDED_AT}), oldest first: a query by
      * value, run hourly by {@see Retention} over the comments settled in the last 30 days and
      * those it has not cleaned yet.
@@ -269,6 +291,46 @@ class Platform
             'order'        => 'ASC',
         ]);
         return array_map('intval', is_array($ids) ? $ids : []);
+    }
+
+    /**
+     * What the plugin recorded about the comments settled since a moment, the newest
+     * first: the outcome and three moments, never the comment's content. A query by value
+     * over {@see Meta::DECIDED_AT}, which only settled comments of the last 30 days carry
+     * ({@see Retention}); it runs when the settings page is shown, and primes the meta of
+     * the comments it finds in one query instead of one a comment.
+     *
+     * @param int $since Unix seconds.
+     * @param int $limit The most comments to read.
+     * @return array<int,array{status:string,submitted_at:int,decided_at:int,timed_out:bool}>
+     */
+    public function settledSince(int $since, int $limit): array
+    {
+        $comments = get_comments([
+            'status'                    => 'any',
+            'meta_key'                  => Meta::DECIDED_AT,
+            'meta_value'                => $since,
+            'meta_compare'              => '>=',
+            'meta_type'                 => 'NUMERIC',
+            'number'                    => $limit,
+            'orderby'                   => 'comment_ID',
+            'order'                     => 'DESC',
+            'update_comment_meta_cache' => true,
+        ]);
+        $rows = [];
+        foreach (is_array($comments) ? $comments : [] as $comment) {
+            $id = is_object($comment) ? (int)($comment->comment_ID ?? 0) : 0;
+            if ($id <= 0) {
+                continue;
+            }
+            $rows[] = [
+                'status'       => $this->meta($id, Meta::STATUS),
+                'submitted_at' => (int)$this->meta($id, Meta::SUBMITTED_AT),
+                'decided_at'   => (int)$this->meta($id, Meta::DECIDED_AT),
+                'timed_out'    => $this->meta($id, Meta::TIMED_OUT) === '1',
+            ];
+        }
+        return $rows;
     }
 
     /**
@@ -310,7 +372,9 @@ class Platform
     }
 
     /**
-     * How many comments flagged for support were written since a moment.
+     * How many comments flagged for support were written since a moment. It runs on every
+     * view of the comments screen, so it asks by the meta key alone, which WordPress
+     * indexes, never by a meta value: the plugin writes {@see Meta::SUPPORT} only as `1`.
      *
      * @param int $since Unix seconds.
      * @return int The count.
@@ -320,7 +384,6 @@ class Platform
         return (int)get_comments([
             'status'     => 'any',
             'meta_key'   => Meta::SUPPORT,
-            'meta_value' => '1',
             'count'      => true,
             'date_query' => [['column' => 'comment_date_gmt', 'after' => gmdate('Y-m-d H:i:s', $since)]],
         ]);

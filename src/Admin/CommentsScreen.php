@@ -105,6 +105,8 @@ final class CommentsScreen
         $step = Log::failedStep($error);
         if ($error === Meta::ERROR_NOT_CONFIGURED) {
             echo '<br /><small>' . esc_html__('wtyczka nie miała poprawnego klucza API lub sekretu webhooka — nie wysłano do oceny', 'minos-moderation') . '</small>';
+        } elseif ($error === Meta::ERROR_NO_TEXT) {
+            echo '<br /><small>' . esc_html__('brak tekstu do oceny (np. sam odnośnik albo obrazek bez opisu) — nie wysłano do oceny', 'minos-moderation') . '</small>';
         } elseif ($error === Meta::ERROR_MASKED_WRITE) {
             echo '<br /><small>' . esc_html__('nie udało się zapisać wersji zamaskowanej — komentarz czeka na ręczną moderację', 'minos-moderation') . '</small>';
         } elseif ($step !== null) {
@@ -113,7 +115,10 @@ final class CommentsScreen
             echo '<br /><small>' . esc_html(sprintf(__('błąd: %s', 'minos-moderation'), $error)) . '</small>';
         }
         if ($this->wp->meta($id, Meta::AUTO_PUBLISHED) === '1') {
-            echo '<br /><small>' . esc_html__('opublikowano bez werdyktu (fail-open); spóźniony werdykt zostanie zastosowany', 'minos-moderation') . '</small>';
+            // The gateway never confirmed it took this text: no late verdict is expected.
+            echo '<br /><small>' . ($this->wp->meta($id, Meta::SUBMITTED_AT) === ''
+                ? esc_html__('opublikowano bez oceny (fail-open)', 'minos-moderation')
+                : esc_html__('opublikowano bez werdyktu (fail-open); spóźniony werdykt zostanie zastosowany', 'minos-moderation')) . '</small>';
         }
         $original = $this->wp->meta($id, Meta::ORIGINAL);
         $comment = $this->wp->comment($id);
@@ -196,11 +201,11 @@ final class CommentsScreen
     }
 
     /**
-     * What the administrator is told while the gateway refuses the key's comments: until
-     * when, and what happens to new comments meanwhile. Never the key or anything from the
-     * gateway's answer but its kind.
+     * What the administrator is told while the gateway asked to wait: until when, why, and
+     * what happens to new comments meanwhile. Never the key or anything from the gateway's
+     * answer but its kind and its code.
      *
-     * @param array{kind:string,until:int,left_s:int} $pause What `Log::pausedUntil` read.
+     * @param array{kind:string,code:string|null,until:int,left_s:int} $pause What `Log::pausedUntil` read.
      * @return string Polish text.
      */
     public static function pauseMessage(array $pause): string
@@ -210,7 +215,13 @@ final class CommentsScreen
         if ($pause['kind'] === Log::PAUSE_DAILY_LIMIT) {
             return sprintf(__('Minos: dzienny limit zapytań klucza jest wyczerpany do %s. Do tego czasu nowe komentarze trafiają do trybu „gdy brak werdyktu” (fail-closed: czekają na moderatora; fail-open: są publikowane bez oceny).', 'minos-moderation'), $at);
         }
-        return sprintf(__('Minos: brama jest przeciążona i nie przyjmuje komentarzy do %s. Komentarze czekają na ponowną wysyłkę; te, których czas oczekiwania minie wcześniej, trafiają do trybu „gdy brak werdyktu” (fail-closed: czekają na moderatora; fail-open: są publikowane bez oceny).', 'minos-moderation'), $at);
+        if ($pause['kind'] === Log::PAUSE_OVERLOAD) {
+            return sprintf(__('Minos: brama jest przeciążona i nie przyjmuje komentarzy do %s. Komentarze czekają na ponowną wysyłkę; te, których czas oczekiwania minie wcześniej, trafiają do trybu „gdy brak werdyktu” (fail-closed: czekają na moderatora; fail-open: są publikowane bez oceny).', 'minos-moderation'), $at);
+        }
+        $why = $pause['code'] !== null
+            ? sprintf(__('kod %s', 'minos-moderation'), $pause['code'])
+            : __('brak odpowiedzi albo błąd bramy', 'minos-moderation');
+        return sprintf(__('Minos: brama poprosiła o przerwę w wysyłaniu komentarzy (%1$s) — wtyczka wznowi wysyłanie o %2$s. Do tego czasu nowe komentarze czekają wstrzymane; te, których czas oczekiwania minie wcześniej, trafiają do trybu „gdy brak werdyktu” (fail-closed: czekają na moderatora; fail-open: są publikowane bez oceny).', 'minos-moderation'), $why, $at);
     }
 
     /**

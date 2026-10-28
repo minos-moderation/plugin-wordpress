@@ -8,6 +8,7 @@ use Minos\WordPress\Admin\CommentsScreen;
 use Minos\WordPress\Admin\SettingsPage;
 use Minos\WordPress\Log;
 use Minos\WordPress\Meta;
+use Minos\WordPress\Outcome;
 use Minos\WordPress\Settings;
 use Minos\WordPress\Submission;
 use Minos\WordPress\Text;
@@ -302,11 +303,32 @@ final class SubmissionTest extends PluginTestCase
             }
             self::assertNull($this->plugin->log->lastConfigError(), 'not a configuration error');
 
-            // The first accepted comment ends it.
-            $this->post('Komentarz po odnowieniu limitu.');
-            self::assertStringNotContainsString('dzienny limit', $this->adminNotices());
-            self::assertStringNotContainsString('dzienny limit', $this->settingsPage());
+            // A comment written during the pause is not sent, and gets the failure mode at
+            // once: the gateway said it refuses until after its timeout.
+            $this->now += 3600;
+            $next = $this->post('Komentarz w czasie wyczerpanego limitu.');
+            self::assertCount(1, WpStub::$requests, $mode);
+            self::assertSame([Meta::UNASSESSED, $approved, 'limit_dobowy_klucza'],
+                [$this->field($next, Meta::STATUS), $this->field($next, 'comment_approved'), $this->field($next, Meta::ERROR)], $mode);
+            self::assertStringContainsString('dzienny limit', $this->adminNotices(), 'still running');
         }
+    }
+
+    public function testAnAcceptedCommentEndsThePauseAndItsNotice(): void
+    {
+        $this->configure();
+        // Another request's answer stores the daily limit while this comment's request is on
+        // its way (two authors at once); the gateway then takes this comment.
+        add_filter('pre_http_request', function ($pre, $args) {
+            $this->plugin->log->pause('limit_dobowy_klucza', $this->now + 36000, true);
+            return WpStub::accepted($args);
+        }, 10, 2);
+        $id = $this->post('Komentarz przyjęty tuż po odmowie innego.');
+
+        self::assertSame((string)$this->now, $this->field($id, Meta::SUBMITTED_AT));
+        self::assertNull($this->plugin->log->sendingPause(), 'the gateway takes comments again');
+        self::assertStringNotContainsString('dzienny limit', $this->adminNotices());
+        self::assertStringNotContainsString('dzienny limit', $this->settingsPage());
     }
 
     public function testAnOverloadShowsItsOwnShorterHourAndTheCommentWaits(): void
@@ -326,15 +348,25 @@ final class SubmissionTest extends PluginTestCase
         self::assertStringNotContainsString('przeciążona', $this->adminNotices(), 'gone once the moment passed');
     }
 
-    public function testOtherRefusalsShowNoPause(): void
+    public function testEveryOtherPauseIsShownWithItsCodeAndItsEnd(): void
     {
         $this->configure();
-        WpStub::answer(429, ['blad' => ['kod' => 'limit_minutowy_klucza', 'ponow_za_s' => 30]]);
-        WpStub::answer(503, ['blad' => ['kod' => 'kolejka_niedostepna']]);
+        WpStub::answer(429, ['blad' => ['kod' => 'limit_minutowy_klucza', 'ponow_za_s' => 30, 'komunikat' => self::KEY]]);
         $this->post('Limit minutowy.');
-        $this->post('Kolejka niedostępna.');
+        foreach (['notices' => $this->adminNotices(), 'settings page' => $this->settingsPage()] as $where => $html) {
+            self::assertStringContainsString('limit_minutowy_klucza', $html, $where);
+            self::assertStringContainsString(wp_date('H:i', $this->now + 30), $html, $where);
+            self::assertStringNotContainsString(substr(self::KEY, 0, 12), $html, $where);
+        }
 
-        self::assertNull($this->plugin->log->pausedUntil());
+        $this->now += 30;
+        WpStub::networkFailure();
+        $this->post('Brama nie odpowiada.');
+        self::assertCount(2, WpStub::$requests);
+        $pause = $this->plugin->log->pausedUntil();
+        self::assertIsArray($pause);
+        self::assertSame([Log::PAUSE_WAIT, null], [$pause['kind'], $pause['code']], 'shown without a code');
+        self::assertStringContainsString(wp_date('H:i', $this->now + Submission::FIRST_BACKOFF_S), $this->adminNotices());
     }
 
     public function testTheGatewaysPauseIsComparedAsGivenNotAsTheRetryIsCapped(): void
@@ -342,13 +374,24 @@ final class SubmissionTest extends PluginTestCase
         $this->configure(['timeout_min' => Settings::MAX_TIMEOUT_MIN]);
         WpStub::answer(429, ['blad' => ['kod' => 'limit_dobowy_klucza', 'ponow_za_s' => 90000]]);
         $late = $this->post('Pauza dłuższa niż doba i niż czas oczekiwania.');
-        self::assertSame($this->now + 90000, $this->plugin->log->pausedUntil()['until'], 'the hour the gateway gave');
+        self::assertSame($this->now + Log::MAX_PAUSE_S, $this->plugin->log->pausedUntil()['until'],
+            'the pause kept is at most a day; the comment was judged by the 25 hours the gateway gave');
+        self::assertSame(Meta::UNASSESSED, $this->field($late, Meta::STATUS));
+        // During that pause a comment with a day's timeout gets the failure mode at once too.
+        $during = $this->post('Komentarz w czasie pauzy dłuższej niż doba.');
+        self::assertSame(Meta::UNASSESSED, $this->field($during, Meta::STATUS));
+        self::assertCount(1, WpStub::$requests);
+
+        $this->setUp();
+        $this->configure(['timeout_min' => Settings::MAX_TIMEOUT_MIN]);
         WpStub::answer(429, ['blad' => ['kod' => 'limit_dobowy_klucza', 'ponow_za_s' => 3600]]);
         $soon = $this->post('Pauza godzinna przy dobowym czasie oczekiwania.');
+        $during = $this->post('Komentarz w czasie pauzy godzinnej.');
 
-        self::assertSame(Meta::UNASSESSED, $this->field($late, Meta::STATUS));
-        self::assertTrue($this->pending($soon), 'an hour ends before a day: it waits');
-        self::assertSame((string)($this->now + 3600), $this->field($soon, Meta::RETRY_AT));
+        foreach ([$soon, $during] as $id) {
+            self::assertTrue($this->pending($id), 'an hour ends before a day: it waits');
+            self::assertSame((string)($this->now + 3600), $this->field($id, Meta::RETRY_AT));
+        }
     }
 
     public function testWithoutAPauseTheBackoffDoublesFromAMinute(): void
@@ -389,13 +432,12 @@ final class SubmissionTest extends PluginTestCase
     public function testARetryThatIsNotDueOrNotPendingSendsNothing(): void
     {
         $this->configure();
+        $accepted = $this->post('Komentarz już przyjęty.');
         WpStub::networkFailure();
         $id = $this->post('Komentarz czekający na ponowienie.');
 
         do_action(Submission::HOOK_RETRY, $id);
-        self::assertCount(1, WpStub::$requests, 'not due yet');
-
-        $accepted = $this->post('Komentarz już przyjęty.');
+        self::assertCount(2, WpStub::$requests, 'not due yet');
         do_action(Submission::HOOK_RETRY, $accepted);
         self::assertCount(2, WpStub::$requests, 'accepted already');
     }
@@ -459,7 +501,8 @@ final class SubmissionTest extends PluginTestCase
         WpStub::answer(429, ['blad' => ['kod' => '<script>' . self::SECRET, 'ponow_za_s' => 5]]);
         $this->post('Drugi poufny komentarz.');
 
-        $stored = json_encode([WpStub::$options[Log::OPTION], WpStub::$options[Log::CONFIG_ERROR_OPTION]]);
+        $stored = json_encode([WpStub::$options[Log::OPTION], WpStub::$options[Log::CONFIG_ERROR_OPTION],
+            WpStub::$options[Log::PAUSE_OPTION]]);
         self::assertStringContainsString('brak_webhooka', $stored, 'the log must hold the code');
         foreach ([self::KEY, self::SECRET, 'Poufny', 'script'] as $secret) {
             self::assertStringNotContainsString($secret, $stored);
@@ -473,18 +516,63 @@ final class SubmissionTest extends PluginTestCase
         for ($i = 0; $i < Log::MAX_ENTRIES + 5; $i++) {
             WpStub::answer(429, ['blad' => ['kod' => 'limit_minutowy_klucza', 'ponow_za_s' => 30]]);
             $this->post('Komentarz numer ' . $i . '.');
+            $this->now += 30;
         }
+        self::assertCount(Log::MAX_ENTRIES + 5, WpStub::$requests, 'each was sent after the pause before it');
         self::assertCount(Log::MAX_ENTRIES, $this->plugin->log->entries());
     }
 
-    public function testACommentWithNoTextGetsTheFailureModeWithoutARequest(): void
+    /**
+     * @return array<string,array{0:string,1:string,2:string}> Content, failure mode, `comment_approved`.
+     */
+    public static function nothingToAssess(): array
     {
-        $this->configure(['failure_mode' => Settings::FAIL_CLOSED]);
-        $id = $this->post('<img src="https://obrazek.example/a.png" />');
+        $link = '<a href="https://kasyno.example/bonus">&nbsp;</a>';
+        $image = '<img src="https://obrazek.example/a.png" />';
+        return [
+            'a link with a blank text, fail-closed' => [$link, Settings::FAIL_CLOSED, '0'],
+            'a link with a blank text, fail-open'   => [$link, Settings::FAIL_OPEN, '1'],
+            'an image without alt, fail-closed'     => [$image, Settings::FAIL_CLOSED, '0'],
+        ];
+    }
 
-        self::assertSame([], WpStub::$requests);
+    /**
+     * Audit reproduction R4 the other way round: a link only a robot reads, with no text to
+     * assess, was published under fail-open with nothing to tell it from an assessed one.
+     * Shared rule D9.5: held, the failure mode at once, no request, and the reason shown.
+     *
+     * @dataProvider nothingToAssess
+     */
+    public function testACommentWithNoTextToAssessGetsTheFailureModeAtOnceAndSaysWhy(string $content, string $mode, string $approved): void
+    {
+        $this->configure(['failure_mode' => $mode]);
+        $id = $this->post($content);
+
+        self::assertSame([], WpStub::$requests, 'nothing to assess: no request');
         self::assertSame(Meta::UNASSESSED, $this->field($id, Meta::STATUS));
-        self::assertSame('0', $this->field($id, 'comment_approved'));
+        self::assertSame($approved, $this->field($id, 'comment_approved'));
+        self::assertSame(Meta::ERROR_NO_TEXT, $this->field($id, Meta::ERROR));
+        self::assertNull($this->field($id, Meta::WAITING), 'settled at once');
+        $column = $this->column($id);
+        self::assertStringContainsString('brak tekstu do oceny', $column, 'the moderator sees why');
+        if ($mode === Settings::FAIL_OPEN) {
+            self::assertSame('1', $this->field($id, Meta::AUTO_PUBLISHED), 'marked as the plugin\'s fail-open publication');
+            self::assertStringContainsString('opublikowano bez oceny', $column);
+            self::assertStringNotContainsString('spóźniony werdykt', $column, 'nothing was sent, so no verdict is on its way');
+            return;
+        }
+        self::assertSame([[$id]], array_column(self::events(Outcome::HOOK_NOTIFY), 'args'), 'the moderator is told');
+    }
+
+    /**
+     * @param int $id A comment.
+     * @return string Its "Minos" column, as a moderator sees it.
+     */
+    private function column(int $id): string
+    {
+        ob_start();
+        (new CommentsScreen($this->plugin->wp, $this->plugin->settings, $this->plugin->log))->renderColumn('minos', $id);
+        return (string)ob_get_clean();
     }
 
     /**
@@ -507,7 +595,7 @@ final class SubmissionTest extends PluginTestCase
         WpStub::$currentUser = 1;
         WpStub::$userCaps[1] = ['manage_options'];
         ob_start();
-        (new SettingsPage($this->plugin->settings, $this->plugin->log, $this->plugin->receiver))->render();
+        (new SettingsPage($this->plugin->settings, $this->plugin->log, $this->plugin->receiver, $this->plugin->stats))->render();
         return (string)ob_get_clean();
     }
 

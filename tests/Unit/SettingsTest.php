@@ -23,7 +23,7 @@ final class SettingsTest extends PluginTestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->page = new SettingsPage($this->plugin->settings, $this->plugin->log, $this->plugin->receiver);
+        $this->page = new SettingsPage($this->plugin->settings, $this->plugin->log, $this->plugin->receiver, $this->plugin->stats);
     }
 
     public function testTheDefaults(): void
@@ -276,6 +276,34 @@ final class SettingsTest extends PluginTestCase
         self::assertStringContainsString('samookaleczenie', $column);
         self::assertStringContainsString('116 123', $column);
         self::assertStringContainsString('samookaleczenia: 1', $this->notices());
+    }
+
+    public function testTheSupportNoticeCountsTheWeeksCuesByTheirKeyAloneNeverByAValue(): void
+    {
+        $this->configure();
+        WpStub::$currentUser = 1;
+        WpStub::$userCaps[1] = ['moderate_comments'];
+        WpStub::$screen = (object)['id' => 'edit-comments'];
+        $cue = ['kategorie' => ['samookaleczenie'], 'wsparcie' => true];
+        $old = $this->post('Starszy komentarz testowy z sygnałem.', 1,
+            ['comment_date_gmt' => gmdate('Y-m-d H:i:s', $this->now - CommentsScreen::SUPPORT_WINDOW_S - 60)]);
+        $this->deliver(self::verdict($old, 'bezpieczne', $cue));
+        foreach (['z sygnałem wsparcia', 'z drugim sygnałem'] as $text) {
+            $id = $this->post('Komentarz testowy ' . $text . '.');
+            $this->deliver(self::verdict($id, 'bezpieczne', $cue));
+        }
+        $plain = $this->post('Zwykły komentarz testowy.');
+        $this->deliver(self::verdict($plain, 'bezpieczne'));
+        WpStub::$queries = [];
+
+        self::assertStringContainsString('samookaleczenia: 2', $this->notices(), 'the week\'s two, not the older one');
+
+        $support = array_values(array_filter(WpStub::$queries, static function (array $query): bool {
+            return ($query['meta_key'] ?? null) === Meta::SUPPORT;
+        }));
+        self::assertCount(1, $support, 'the notice asked for the support cues');
+        self::assertArrayNotHasKey('meta_value', $support[0], 'never a query by meta value');
+        self::assertArrayNotHasKey('meta_query', $support[0]);
     }
 
     public function testTheLogOptionHoldsOnlyTheFourFields(): void

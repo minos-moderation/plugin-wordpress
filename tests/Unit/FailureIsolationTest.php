@@ -124,50 +124,104 @@ final class FailureIsolationTest extends PluginTestCase
         self::assertContains(['moderator', $this->ids[1]], WpStub::$emails, 'its e-mail went out');
     }
 
-    public function testASubmissionThatFailsInTheSweepLeavesTheRestOfThePass(): void
+    /**
+     * Three comments held while the gateway was unreachable: the first one's failed request
+     * paused every submission, so all three are due together.
+     */
+    private function threeDue(): void
     {
         $this->configure();
+        WpStub::networkFailure();
         for ($i = 0; $i < 3; $i++) {
-            WpStub::networkFailure();
             $this->ids[] = $this->post('Komentarz czekający na ponowienie numer ' . $i . '.');
         }
-        $this->breakFor('pre_http_request', function ($pre, $args): bool {
-            return strpos((string)($args['body'] ?? ''), '"wp:' . $this->ids[1] . '"') !== false;
+        self::assertCount(1, WpStub::$requests);
+        $this->now += Submission::FIRST_BACKOFF_S;
+    }
+
+    public function testACommentThatFailsWhileItsRequestIsBuiltIsLeftOutAndTheOthersGo(): void
+    {
+        $this->threeDue();
+        $this->breakFor('get_comment', function ($comment): bool {
+            return is_object($comment) && (int)$comment->comment_ID === $this->ids[1];
         });
-        $this->now += 60;
 
         do_action(Sweeper::HOOK);
 
+        self::assertSame(['wp:' . $this->ids[0], 'wp:' . $this->ids[2]], $this->sentIds(), 'one request, without it');
         foreach ([$this->ids[0], $this->ids[2]] as $id) {
             self::assertSame((string)$this->now, $this->field($id, Meta::SUBMITTED_AT), 'sent in the same pass');
         }
         self::assertNull($this->field($this->ids[1], Meta::SUBMITTED_AT));
-        self::assertNotNull($this->field($this->ids[1], Meta::RETRY_AT), 'still due');
+        self::assertTrue($this->plugin->submission->due($this->ids[1]), 'still due');
         $this->assertLoggedOnce(Log::STEP_SUBMIT);
 
         do_action(Sweeper::HOOK);
         self::assertSame((string)$this->now, $this->field($this->ids[1], Meta::SUBMITTED_AT), 'sent in the next pass');
     }
 
-    public function testARetryEventThatFailsDoesNotStopWpCronAndStaysDue(): void
+    public function testARequestThatFailsLeavesItsCommentsDueAndTheNextRequestGoes(): void
     {
         $this->configure();
-        for ($i = 0; $i < 3; $i++) {
-            WpStub::networkFailure();
-            $this->ids[] = $this->post('Komentarz z ponowieniem w WP-Cron numer ' . $i . '.');
+        WpStub::networkFailure();
+        for ($i = 0; $i < Submission::MAX_ITEMS + 3; $i++) {
+            $this->ids[] = $this->post('Komentarz w kolejce ponowień numer ' . $i . '.');
         }
-        $this->breakFor('pre_http_request', function ($pre, $args): bool {
-            return strpos((string)($args['body'] ?? ''), '"wp:' . $this->ids[1] . '"') !== false;
+        $this->now += Submission::FIRST_BACKOFF_S;
+        // The first request of the pass fails on the way (another plugin's HTTP hook).
+        $this->breakFor('pre_http_request', static function (): bool {
+            return true;
         });
-        $this->now += 60;
+
+        do_action(Sweeper::HOOK);
+
+        $failed = array_slice($this->ids, 0, Submission::MAX_ITEMS);
+        $next = array_slice($this->ids, Submission::MAX_ITEMS);
+        self::assertSame(array_map(static function (int $id): string {
+            return 'wp:' . $id;
+        }, $next), $this->sentIds(), 'the next request went');
+        foreach ($failed as $id) {
+            self::assertNull($this->field($id, Meta::SUBMITTED_AT));
+            self::assertTrue($this->plugin->submission->due($id), 'still due');
+            self::assertSame(Log::failureCode(Log::STEP_SUBMIT), $this->field($id, Meta::ERROR));
+        }
+        $failures = array_values(array_filter($this->plugin->log->entries(), static function (array $entry): bool {
+            return Log::failedStep($entry['code']) !== null;
+        }));
+        self::assertSame([[Log::failureCode(Log::STEP_SUBMIT), $failed[0]]], array_map(static function (array $entry): array {
+            return [$entry['code'], $entry['comment']];
+        }, $failures), 'logged once, under the request\'s first comment');
+        self::assertStringNotContainsString('tajna', (string)json_encode([WpStub::$options, WpStub::$meta], JSON_UNESCAPED_UNICODE));
+
+        do_action(Sweeper::HOOK);
+        foreach ($failed as $id) {
+            self::assertSame((string)$this->now, $this->field($id, Meta::SUBMITTED_AT), 'sent in the next pass');
+        }
+    }
+
+    public function testARetryEventThatFailsDoesNotStopWpCronAndItsCommentsStayDue(): void
+    {
+        $this->threeDue();
+        $this->breakFor('pre_http_request', static function (): bool {
+            return true;
+        });
+
+        // Its request carries all three due comments, and fails on the way.
+        do_action(Submission::HOOK_RETRY, $this->ids[1]);
 
         foreach ($this->ids as $id) {
-            do_action(Submission::HOOK_RETRY, $id);
+            self::assertNull($this->field($id, Meta::SUBMITTED_AT));
+            self::assertTrue($this->plugin->submission->due($id), 'still due');
         }
-
-        self::assertNotNull($this->field($this->ids[2], Meta::SUBMITTED_AT), 'the next event ran');
-        self::assertNotNull($this->field($this->ids[1], Meta::RETRY_AT));
         $this->assertLoggedOnce(Log::STEP_SUBMIT);
+
+        do_action(Submission::HOOK_RETRY, $this->ids[0]);
+        do_action(Submission::HOOK_RETRY, $this->ids[2]);
+
+        self::assertCount(2, WpStub::$requests, 'the next event sent all three; the last found nothing left');
+        foreach ($this->ids as $id) {
+            self::assertSame((string)$this->now, $this->field($id, Meta::SUBMITTED_AT));
+        }
     }
 
     public function testAFailureWhileTheAuthorPostsLeavesTheCommentDueForTheSweep(): void
@@ -328,8 +382,7 @@ final class FailureIsolationTest extends PluginTestCase
             do_action($event['hook'], ...$event['args']);
         }
         $sent = [];
-        foreach (WpStub::$requests as $request) {
-            $item = json_decode($request['args']['body'], true)['elementy'][0];
+        foreach ($this->sentItems() as [, $item]) {
             $sent[$item['id']] = $item['tekst'];
         }
         self::assertSame($masked, $sent['wp:' . $this->ids[1] . '.1'] ?? null, 'revision 1 sent the mask');

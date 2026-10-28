@@ -15,8 +15,10 @@ defined('ABSPATH') || exit;
  * message. The log keeps the last
  * {@see MAX_ENTRIES}. A configuration error (a refusal that retrying will not fix) is also
  * kept on its own, for the admin notice, until the gateway accepts a comment again; so is
- * the moment until which the gateway refuses the key's comments (its daily limit, or an
- * overload), until that moment passes or a comment is accepted.
+ * the moment until which the gateway asked to wait (`429`, `408`, `5xx`, no answer), at
+ * most a day ahead, which every submission keeps ({@see sendingPause}) and the
+ * administrator is shown ({@see pausedUntil}), until that moment passes, a comment is
+ * accepted, or the administrator changes the key, the gateway's address or the switch.
  */
 final class Log
 {
@@ -27,14 +29,24 @@ final class Log
     public const CONFIG_ERROR_OPTION = 'minos_moderation_config_error';
 
     /**
-     * The option with the moment until which the gateway refuses the key's comments, after
-     * a daily limit or an overload (not autoloaded).
+     * The option with the moment until which the gateway asked to wait, its kind and code
+     * (not autoloaded).
      */
     public const PAUSE_OPTION = 'minos_moderation_paused';
 
-    /** {@see pause} kinds: the key's daily limit, and the gateway's overload. */
+    /**
+     * {@see pause} kinds: the key's daily limit, the gateway's overload, and any other
+     * answer that asks to wait; each has its own message for the administrator.
+     */
     public const PAUSE_DAILY_LIMIT = 'limit_dobowy';
     public const PAUSE_OVERLOAD = 'przeciazenie';
+    public const PAUSE_WAIT = 'ponowienie';
+
+    /**
+     * The longest pause kept, in seconds: a day, the longest receive timeout. The gateway's
+     * daily limit renews within it.
+     */
+    public const MAX_PAUSE_S = 86400;
 
     /** The refusal codes behind each kind (the contract's 429 codes). */
     private const PAUSE_CODES = [
@@ -152,35 +164,100 @@ final class Log
     }
 
     /**
-     * Records, for the administrator, that the gateway refuses the key's comments until a
-     * moment: a daily limit or an overload. Other refusals record nothing here.
+     * Records that the gateway asked to wait until a moment (a `429`, a `408`, a `5xx`, no
+     * answer): nothing is sent before it ({@see sendingPause}), and the administrator is
+     * shown until when and why ({@see pausedUntil}). The moment is kept at most
+     * {@see MAX_PAUSE_S} ahead: while nothing is sent, no `202` can end the pause, so a
+     * longer one would stop the plugin for good; when it ends, the next answer says whether
+     * the gateway still refuses. A pause already running that ends later stays: the answer
+     * to a request sent before it never shortens it.
      *
-     * @param string|null $code  The refusal's code.
-     * @param int         $until Unix seconds: now plus the gateway's `ponow_za_s`, uncapped.
+     * @param string|null $code  The refusal's code, or null.
+     * @param int         $until Unix seconds: now plus the gateway's `ponow_za_s`, or plus
+     *     the plugin's backoff.
+     * @param bool        $given Whether the moment is the gateway's own (`ponow_za_s`).
      * @return void
      */
-    public function pause(?string $code, int $until): void
+    public function pause(?string $code, int $until, bool $given): void
     {
-        $kind = self::PAUSE_CODES[(string)$code] ?? null;
-        if ($kind !== null) {
-            $this->wp->saveOption(self::PAUSE_OPTION, ['kind' => $kind, 'until' => $until], false);
+        $until = min($until, $this->wp->now() + self::MAX_PAUSE_S);
+        $running = $this->sendingPause();
+        if ($running !== null && $running['until'] >= $until) {
+            return;
+        }
+        $this->wp->saveOption(self::PAUSE_OPTION, ['kind' => self::PAUSE_CODES[(string)$code] ?? self::PAUSE_WAIT,
+            'until' => $until, 'code' => self::safeCode($code), 'given' => $given], false);
+    }
+
+    /**
+     * Ends the pause at once: the administrator changed what the requests go out with (the
+     * key, the gateway's address) or switched moderation off or on, so the gateway's last
+     * answer no longer says anything about the next one.
+     *
+     * @return void
+     */
+    public function endPause(): void
+    {
+        if ($this->wp->option(self::PAUSE_OPTION, null) !== null) {
+            $this->wp->deleteOption(self::PAUSE_OPTION);
         }
     }
 
     /**
-     * The refusal pause still running: its kind, the moment it ends and how far that is.
+     * The pause every submission keeps while it runs: until when, why, and whether the
+     * gateway itself gave the moment.
      *
-     * @return array{kind:string,until:int,left_s:int}|null The pause, or null when there is
-     *     none now.
+     * @return array{until:int,code:string|null,given:bool}|null The pause, or null when
+     *     there is none now.
+     */
+    public function sendingPause(): ?array
+    {
+        $pause = $this->runningPause();
+        if ($pause === null) {
+            return null;
+        }
+        return [
+            'until' => (int)$pause['until'],
+            'code'  => is_string($pause['code'] ?? null) ? self::safeCode($pause['code']) : null,
+            // A pause stored before this field was the gateway's (a daily limit, an overload).
+            'given' => ($pause['given'] ?? true) !== false,
+        ];
+    }
+
+    /**
+     * The pause still running, for the administrator: its kind (a daily limit, an
+     * overload, or any other answer that asks to wait), its code, the moment it ends and
+     * how far that is.
+     *
+     * @return array{kind:string,code:string|null,until:int,left_s:int}|null The pause, or
+     *     null when there is none now.
      */
     public function pausedUntil(): ?array
     {
-        $pause = $this->wp->option(self::PAUSE_OPTION, null);
-        $left = is_array($pause) ? (int)($pause['until'] ?? 0) - $this->wp->now() : 0;
-        if (!is_array($pause) || !in_array($pause['kind'] ?? null, self::PAUSE_CODES, true) || $left <= 0) {
+        $pause = $this->runningPause();
+        if ($pause === null) {
             return null;
         }
-        return ['kind' => (string)$pause['kind'], 'until' => (int)$pause['until'], 'left_s' => $left];
+        $kind = in_array($pause['kind'] ?? null, self::PAUSE_CODES, true) ? (string)$pause['kind'] : self::PAUSE_WAIT;
+        return [
+            'kind'   => $kind,
+            'code'   => is_string($pause['code'] ?? null) ? self::safeCode($pause['code']) : null,
+            'until'  => (int)$pause['until'],
+            'left_s' => (int)$pause['until'] - $this->wp->now(),
+        ];
+    }
+
+    /**
+     * The stored pause while it runs. One that ends more than {@see MAX_PAUSE_S} ahead was
+     * not written by {@see pause} (a damaged option) and counts as none.
+     *
+     * @return array<string,mixed>|null The stored pause, or null.
+     */
+    private function runningPause(): ?array
+    {
+        $pause = $this->wp->option(self::PAUSE_OPTION, null);
+        $left = is_array($pause) ? (int)($pause['until'] ?? 0) - $this->wp->now() : 0;
+        return is_array($pause) && $left > 0 && $left <= self::MAX_PAUSE_S ? $pause : null;
     }
 
     /**

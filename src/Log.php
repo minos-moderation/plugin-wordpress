@@ -48,13 +48,14 @@ final class Log
 
     /**
      * The steps {@see failure} names: the receive timeout's failure mode, a submission (in
-     * the author's request, a retry or the sweep), the moderator's e-mail from WP-Cron, and
-     * a verdict the webhook applies.
+     * the author's request, a retry or the sweep), the moderator's e-mail from WP-Cron, a
+     * verdict the webhook applies, and the removal of a settled comment's data after 30 days.
      */
     public const STEP_TIMEOUT = 'czas_oczekiwania';
     public const STEP_SUBMIT = 'wysylka';
     public const STEP_NOTIFY = 'powiadomienie';
     public const STEP_VERDICT = 'werdykt';
+    public const STEP_RETENTION = 'usuwanie_danych';
 
     /** The prefix of {@see failureCode}. */
     private const FAILURE_PREFIX = 'wyjatek_';

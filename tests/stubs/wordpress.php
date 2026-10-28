@@ -323,13 +323,22 @@ function get_option($name, $default = false)
     return array_key_exists($name, WpStub::$options) ? WpStub::$options[$name] : $default;
 }
 
+/** As core: an unchanged value writes nothing; a change fires `update_option_{$name}`. */
 function update_option($name, $value, $autoload = null)
 {
     $value = apply_filters('sanitize_option_' . $name, $value, $name, $value);
     if (!array_key_exists($name, WpStub::$options)) {
         WpStub::$autoload[$name] = $autoload === null ? true : (bool)$autoload;
+        WpStub::$options[$name] = $value;
+        do_action('add_option_' . $name, $name, $value);
+        return true;
+    }
+    $old = WpStub::$options[$name];
+    if ($old === $value) {
+        return false;
     }
     WpStub::$options[$name] = $value;
+    do_action('update_option_' . $name, $old, $value, $name);
     return true;
 }
 
@@ -372,8 +381,17 @@ function get_comments($args = [])
         }
         if (isset($args['meta_key'])) {
             $meta = WpStub::$meta[$id][$args['meta_key']] ?? null;
-            if ($meta === null || (isset($args['meta_value']) && $meta !== $args['meta_value'])) {
+            if ($meta === null) {
                 continue;
+            }
+            if (isset($args['meta_value'])) {
+                $compare = $args['meta_compare'] ?? '=';
+                $numeric = ($args['meta_type'] ?? '') === 'NUMERIC';
+                $left = $numeric ? (int)$meta : $meta;
+                $right = $numeric ? (int)$args['meta_value'] : (string)$args['meta_value'];
+                if (($compare === '=' && $left !== $right) || ($compare === '<' && !($left < $right))) {
+                    continue;
+                }
             }
         }
         if (isset($args['user_id']) && (int)$row['user_id'] !== (int)$args['user_id']) {

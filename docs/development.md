@@ -15,6 +15,7 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
 | `src/Receiver.php` | The REST webhook `minos/v1/webhook`: `404` while switched off; raw body, `Signature::verify`, `WebhookPayload::parse`, dedupe. |
 | `src/Outcome.php` | Applies a verdict (on time or late) or the failure mode; verified masked writes; the held-back moderator e-mail. |
 | `src/Sweeper.php` | WP-Cron every 5 minutes: the receive timeout and due retries. |
+| `src/Retention.php` | WP-Cron hourly: the `_minos_*` meta of a comment settled 30 days ago goes (shared rule D9.11). |
 | `src/Text.php` | Plain text for the gateway (strip, keep `title`/`alt` text, block tags as line breaks, decode, trim, cut at 3000), link domains, whether a masked text fits, and back to safe HTML. |
 | `src/Upgrade.php` | Brings data an earlier version stored up to date, once per site (`minos_moderation_schema`). |
 | `src/Log.php` | The administrator's error log: codes and statuses, never content or secrets. |
@@ -66,7 +67,16 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
    stays, and grows with every comment ever assessed).
 
 With `enabled` off the plugin does nothing: no hold, no submission, no retry, no sweep, and
-the webhook answers `404`. Waiting comments stay in WordPress's queue for a person.
+the webhook answers `404`. Waiting comments stay in WordPress's queue for a person. Only the
+moderator's e-mail of an outcome applied before and the 30-day retention still run.
+Switched on without a usable key or secret (`Settings::usable`: what the settings form
+accepts), the plugin holds every new comment and gives it the failure mode at once
+(`brak_konfiguracji` in `_minos_error`), with an error notice on every admin screen (shared
+rule D9.12; a fresh install starts switched off). Switching it on again
+(`update_option_minos_moderation_settings`, `Submission::onSettingsSaved`) reopens every
+waiting comment as its next revision with a fresh timeout and schedules its retry at once,
+so WP-Cron sends them (shared rule D9.13; at most `RESUME_BATCH`); one a person decided
+meanwhile is settled as `nieocenione` and left alone.
 
 Decisions worth knowing before changing anything:
 
@@ -130,6 +140,13 @@ Decisions worth knowing before changing anything:
   runs from WP-Cron. The post's author is mailed by core itself on approval
   (`wp_set_comment_status` hooks `wp_new_comment_notify_postauthor`), so the plugin never
   sends that one.
+- **Retention (shared rule D9.11).** `Outcome::settle` records `_minos_decided_at`;
+  `Retention` (hourly, `Retention::BATCH` a run, also while switched off) removes every
+  `_minos_*` key of a comment settled more than 30 days ago — the original of a masked
+  comment, the held mask, the verdict, the categories. Its query compares
+  `_minos_decided_at` by value (`meta_compare` `<`), once an hour, over the comments of the
+  last 30 days; a reopened revision loses the key until its own verdict. `Upgrade` step 3
+  dates comments settled before the update from `_minos_held_at`.
 - **Not done:** batching several comments into one request (every request carries one
   item); translation files (the source strings are Polish, in `__()` with the
   `minos-moderation` domain, and `languages/` is loaded when present).
@@ -159,6 +176,9 @@ changed; approval mails the post's author), `transition_comment_status`,
 `do_settings_sections`, `submit_button`, `checked`, `selected`, `esc_*`, `wp_date`,
 `sanitize_textarea_field`, `manage_edit-comments_columns`, `manage_comments_custom_column`,
 `admin_notices`, `get_current_screen`, `comment_form`, `notify_moderator`,
+`update_option_{$option}` (old and new value, only on a change), `pre_http_request` and the
+`schedule_event` filter (run inside `wp_remote_post` / `wp_schedule_single_event`; another
+plugin's callback may throw there), `get_comments` with `meta_compare` / `meta_type`,
 `wp_new_comment_notify_moderator`, `wp_new_comment_notify_postauthor`,
 `load_plugin_textdomain`, `register_activation_hook`, `register_deactivation_hook`,
 `WP_UNINSTALL_PLUGIN`.

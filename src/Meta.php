@@ -88,6 +88,12 @@ final class Meta
     public const AUTO_PUBLISHED = '_minos_auto_published';
 
     /**
+     * When the comment was settled (unix seconds): its verdict, or the failure mode. Thirty
+     * days later every `_minos_*` key of the comment goes ({@see Retention}).
+     */
+    public const DECIDED_AT = '_minos_decided_at';
+
+    /**
      * `1` when the failure mode applied because no verdict could arrive in time (the receive
      * timeout passed): such a comment was never assessed, so an edit sends it again.
      */
@@ -98,6 +104,7 @@ final class Meta
         self::STATUS, self::WAITING, self::HELD_AT, self::REVISION, self::SUBMITTED_AT, self::WP_APPROVED, self::RETRY_AT,
         self::ATTEMPTS, self::ORIGINAL, self::MASKED, self::SUPPORT, self::CATEGORIES, self::ERROR,
         self::SENT_CHARS, self::SENT_HASH, self::CUT, self::AUTO_PUBLISHED, self::TIMED_OUT,
+        self::DECIDED_AT,
     ];
 
     /** {@see STATUS} of a comment waiting for its verdict (a wire-style value, Polish). */
@@ -111,4 +118,10 @@ final class Meta
      * (WordPress refused the update, or stored something else): the comment stays held.
      */
     public const ERROR_MASKED_WRITE = 'zapis_zamaskowanej_nieudany';
+
+    /**
+     * {@see ERROR} when the plugin was switched on without a usable key or webhook secret,
+     * so it sent nothing and the failure mode applied.
+     */
+    public const ERROR_NOT_CONFIGURED = 'brak_konfiguracji';
 }

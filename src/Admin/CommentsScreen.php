@@ -102,7 +102,9 @@ final class CommentsScreen
         }
         $error = $this->wp->meta($id, Meta::ERROR);
         $step = Log::failedStep($error);
-        if ($error === Meta::ERROR_MASKED_WRITE) {
+        if ($error === Meta::ERROR_NOT_CONFIGURED) {
+            echo '<br /><small>' . esc_html__('wtyczka nie miała poprawnego klucza API lub sekretu webhooka — nie wysłano do oceny', 'minos-moderation') . '</small>';
+        } elseif ($error === Meta::ERROR_MASKED_WRITE) {
             echo '<br /><small>' . esc_html__('nie udało się zapisać wersji zamaskowanej — komentarz czeka na ręczną moderację', 'minos-moderation') . '</small>';
         } elseif ($step !== null) {
             echo '<br /><small>' . esc_html(sprintf(__('błąd przy kroku „%s” (zgłosiła go wtyczka lub inna wtyczka; szczegóły nie są zapisywane)', 'minos-moderation'), self::stepLabel($step))) . '</small>';
@@ -148,7 +150,7 @@ final class CommentsScreen
                 self::notice('warning', self::pauseMessage($pause));
             }
             if ($this->settings->all()['enabled'] && !$this->settings->isActive()) {
-                self::notice('warning', __('Minos: moderacja jest włączona, ale brakuje klucza API lub sekretu webhooka, więc komentarze nie są wysyłane do oceny.', 'minos-moderation'));
+                self::notice('error', self::notConfiguredMessage());
             }
         }
         $screen = function_exists('get_current_screen') ? get_current_screen() : null;
@@ -205,6 +207,16 @@ final class CommentsScreen
             return sprintf(__('Minos: dzienny limit zapytań klucza jest wyczerpany do %s. Do tego czasu nowe komentarze trafiają do trybu „gdy brak werdyktu” (fail-closed: czekają na moderatora; fail-open: są publikowane bez oceny).', 'minos-moderation'), $at);
         }
         return sprintf(__('Minos: brama jest przeciążona i nie przyjmuje komentarzy do %s. Komentarze czekają na ponowną wysyłkę; te, których czas oczekiwania minie wcześniej, trafiają do trybu „gdy brak werdyktu” (fail-closed: czekają na moderatora; fail-open: są publikowane bez oceny).', 'minos-moderation'), $at);
+    }
+
+    /**
+     * Why a switched-on plugin sends nothing, and what happens to new comments meanwhile.
+     *
+     * @return string Polish text.
+     */
+    public static function notConfiguredMessage(): string
+    {
+        return __('Minos: moderacja jest włączona, ale brakuje poprawnego klucza API lub sekretu webhooka. Komentarze nie są wysyłane do oceny, a każdy nowy komentarz trafia od razu do trybu „gdy brak werdyktu” (fail-closed: czeka na moderatora; fail-open: jest publikowany bez oceny). Uzupełnij klucz i sekret w Ustawienia → Minos.', 'minos-moderation');
     }
 
     /**

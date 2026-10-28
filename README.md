@@ -25,14 +25,20 @@ Licencja: GPL-2.0 lub nowsza (plik `LICENSE`).
    ustawienia i zaznacz **Moderacja włączona**.
 4. Przekaż operatorowi **adres webhooka** widoczny na stronie ustawień (patrz niżej).
 
-Do czasu włączenia moderacji i zapisania klucza oraz sekretu wtyczka nic nie robi:
-komentarze działają tak jak bez niej.
+Świeżo zainstalowana wtyczka jest wyłączona i nic nie robi: komentarze działają tak jak
+bez niej. Włączona bez poprawnego klucza API lub sekretu webhooka nie wysyła komentarzy,
+a każdy nowy komentarz od razu trafia do trybu „Gdy brak werdyktu” (przy fail-closed czeka
+na moderatora); komunikat na każdej stronie panelu mówi, czego brakuje.
 
 **Wyłączenie moderacji** (odznaczenie **Moderacja włączona**) zatrzymuje wtyczkę
 całkowicie: nie wstrzymuje ani nie wysyła nowych komentarzy, nie ponawia wysyłek, nie
 stosuje trybu „Gdy brak werdyktu”, a adres webhooka odpowiada HTTP 404, więc werdykty nie
 są przyjmowane. Komentarze, które czekały na werdykt, zostają w kolejce moderacji
-WordPressa do decyzji człowieka.
+WordPressa do decyzji człowieka. **Ponowne włączenie** wysyła te, których nikt w tym czasie
+nie rozstrzygnął, do oceny jeszcze raz (jako nową wersję, przez WP-Cron), z nowym czasem
+oczekiwania — nie trafiają hurtem do trybu „Gdy brak werdyktu”. Wyłączona wtyczka nadal
+usuwa po 30 dniach swoje dane o rozstrzygniętych komentarzach (patrz „Przechowywanie
+danych”).
 
 ## Adres webhooka
 
@@ -57,7 +63,7 @@ do bazy.
 
 | Ustawienie | Domyślnie | Znaczenie |
 |---|---|---|
-| Moderacja włączona | wyłączona | Włącza wstrzymywanie i wysyłanie komentarzy. Działa dopiero z zapisanym kluczem i sekretem. Po wyłączeniu wtyczka nic nie robi (patrz wyżej). |
+| Moderacja włączona | wyłączona | Włącza wstrzymywanie i wysyłanie komentarzy. Bez poprawnego klucza i sekretu nowe komentarze trafiają od razu do trybu „Gdy brak werdyktu”. Po wyłączeniu wtyczka nic nie robi (patrz wyżej). |
 | Adres bramy | `https://gateway.wergiliusz.app` | Zmieniaj tylko na polecenie operatora. Wymagane `https://` (`http://` tylko dla `localhost` — do testów z atrapą bramy). |
 | Klucz API | — | `wgb2b_…`. Po zapisaniu strona pokazuje tylko jego początek; puste pole przy zapisie zostawia zapisany klucz. |
 | Sekret webhooka | — | Służy wyłącznie do sprawdzania podpisu werdyktów i nigdy nie jest wysyłany. Strona pokazuje tylko jego początek. |
@@ -215,6 +221,17 @@ treść nie jest przechowywana po ocenie — to nieprawda: wysyłane są też li
 ich domeny i informacja o pierwszym komentarzu, tekst czeka w kolejce do 30 minut, a jego
 fragment może pozostać w dzienniku błędów do 72 godzin. Tekst domyślny czeka jeszcze na
 ostateczne brzmienie uzgodnione z polityką prywatności usługi Minos.
+
+## Przechowywanie danych
+
+Przy komentarzu (w danych `_minos_*`) wtyczka przechowuje: stan oceny, werdykt i kategorie,
+sygnał wsparcia, oryginał komentarza opublikowanego w wersji zamaskowanej, wersję
+zamaskowaną komentarza wstrzymanego do moderacji oraz dane techniczne (czasy, skrót
+wysłanego tekstu). **30 dni po rozstrzygnięciu** komentarza (werdykt albo tryb „Gdy brak
+werdyktu”) wtyczka usuwa wszystkie te dane — także oryginał — co godzinę, przez WP-Cron,
+również gdy moderacja jest wyłączona. Sam komentarz zostaje bez zmian: wersja zamaskowana
+pozostaje opublikowana, a kolumna **Minos** pokazuje odtąd „—”. Dane komentarzy, które
+wciąż czekają na werdykt, nie są usuwane.
 
 ## Sygnał wsparcia
 

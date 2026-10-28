@@ -69,8 +69,8 @@ final class Settings
     }
 
     /**
-     * The defaults of a fresh installation. The plugin starts switched off: it holds no
-     * comment until the administrator has entered a key and a secret and switched it on.
+     * The defaults of a fresh installation. The plugin starts switched off (shared rule
+     * D9.12): it holds no comment until the administrator switches it on.
      *
      * @return array<string,mixed> Setting name → value.
      */
@@ -145,13 +145,27 @@ final class Settings
     }
 
     /**
-     * Whether the plugin holds and submits comments: switched on, with a key and a secret.
+     * Whether the plugin can submit comments and check verdicts: switched on, with a key
+     * and a webhook secret the settings form would accept. Switched on without them, it
+     * still holds new comments, and gives each the failure mode at once (shared rule
+     * D9.12); the gateway's address is always usable, since an unusable one reads as the
+     * default ({@see normalise}).
      *
      * @return bool The answer.
      */
     public function isActive(): bool
     {
-        return $this->all()['enabled'] && $this->apiKey() !== '' && $this->webhookSecret() !== '';
+        return $this->all()['enabled'] && $this->usable();
+    }
+
+    /**
+     * Whether the stored key and webhook secret pass the checks the settings form applies.
+     *
+     * @return bool The answer.
+     */
+    public function usable(): bool
+    {
+        return self::validKey($this->apiKey()) && self::validSecret($this->webhookSecret());
     }
 
     /**

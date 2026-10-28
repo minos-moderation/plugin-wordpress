@@ -185,18 +185,46 @@ final class SubmissionTest extends PluginTestCase
         self::assertSame($error, apply_filters('pre_comment_approved', $error, ['comment_type' => 'comment']));
     }
 
-    public function testNothingIsHeldWhileThePluginIsOffOrHasNoSecret(): void
+    public function testNothingIsHeldWhileThePluginIsOff(): void
     {
         $this->configure(['enabled' => false]);
         $off = $this->post('Wtyczka wyłączona.');
 
-        $this->configure();
-        WpStub::$options[Settings::SECRET_OPTION] = '';
-        $noSecret = $this->post('Brak sekretu.');
-
         self::assertSame('1', $this->field($off, 'comment_approved'));
-        self::assertSame('1', $this->field($noSecret, 'comment_approved'));
+        self::assertNull($this->field($off, Meta::STATUS));
         self::assertSame([], WpStub::$requests);
+    }
+
+    /**
+     * @return array<string,array{0:string,1:string}>
+     */
+    public static function unusableConfigurations(): array
+    {
+        return [
+            'no secret'          => [self::KEY, ''],
+            'a secret too short' => [self::KEY, 'krotki'],
+            'no key'             => ['', self::SECRET],
+            'a malformed key'    => ['sk-nie-ten-format', self::SECRET],
+        ];
+    }
+
+    /**
+     * @dataProvider unusableConfigurations
+     */
+    public function testSwitchedOnWithoutAUsableKeyOrSecretEveryNewCommentGetsTheFailureMode(string $key, string $secret): void
+    {
+        foreach ([Settings::FAIL_CLOSED => '0', Settings::FAIL_OPEN => '1'] as $mode => $approved) {
+            $this->configure(['failure_mode' => $mode]);
+            WpStub::$options[Settings::KEY_OPTION] = $key;
+            WpStub::$options[Settings::SECRET_OPTION] = $secret;
+
+            $id = $this->post('Komentarz przy niepełnej konfiguracji.');
+
+            self::assertSame($approved, $this->field($id, 'comment_approved'), $mode);
+            self::assertSame(Meta::UNASSESSED, $this->field($id, Meta::STATUS));
+            self::assertSame(Meta::ERROR_NOT_CONFIGURED, $this->field($id, Meta::ERROR));
+        }
+        self::assertSame([], WpStub::$requests, 'nothing leaves the site');
     }
 
     public function testACommentWordPressItselfHeldIsRecordedAsSuch(): void

@@ -15,7 +15,8 @@ defined('ABSPATH') || exit;
  * moderated, and left exactly as WordPress decided: comments by users who may moderate
  * comments (they can publish them anyway), comments WordPress already marked as spam or
  * trash or refused, pingbacks, trackbacks and other comment types, and everything while
- * the plugin is switched off or has no key or secret.
+ * the plugin is switched off. Switched on without a usable key or secret, it sends
+ * nothing and gives every new comment the failure mode at once.
  *
  * What travels is the comment's id, its plain text (the first 3000 characters; a longer
  * comment is marked {@see Meta::CUT} and no verdict publishes it), the profile, and spam
@@ -24,7 +25,8 @@ defined('ABSPATH') || exit;
  * or user id.
  *
  * While moderation is switched off nothing is sent, not even a retry: comments already
- * waiting stay in WordPress's moderation queue for a person.
+ * waiting stay in WordPress's moderation queue for a person. Switching it on again sends
+ * them again, each as its next revision with a fresh receive timeout ({@see onSettingsSaved}).
  *
  * An edit that changes the text of a comment still waiting for its verdict, or of one the
  * receive timeout left without an assessment (held, or published under fail-open), sends
@@ -48,6 +50,12 @@ final class Submission
 
     /** The longest retry pause. */
     public const MAX_BACKOFF_S = 3600;
+
+    /**
+     * The most waiting comments switching the plugin on again sends again (a day of the
+     * paid plan's limit); any beyond keep their old timeout.
+     */
+    public const RESUME_BATCH = 1000;
 
     /** The comment types the plugin moderates ('' is the legacy spelling of a comment). */
     private const TYPES = ['comment', ''];
@@ -106,7 +114,7 @@ final class Submission
     {
         $this->held = null;
         if (!in_array($approved, [0, 1, '0', '1'], true) || !is_array($commentdata)
-            || !$this->settings->isActive()) {
+            || !$this->settings->all()['enabled']) {
             return $approved;
         }
         if (!in_array((string)($commentdata['comment_type'] ?? ''), self::TYPES, true)) {
@@ -178,6 +186,38 @@ final class Submission
     }
 
     /**
+     * `update_option_{settings}` action: switching moderation on again sends what was
+     * waiting when it was switched off, each as its next revision with a fresh receive
+     * timeout (shared rule D9.13), from WP-Cron rather than in the administrator's request.
+     * A comment a person decided on meanwhile is left to that decision.
+     *
+     * @param mixed $old The settings before.
+     * @param mixed $new The settings now.
+     * @return void
+     */
+    public function onSettingsSaved($old, $new): void
+    {
+        $was = Settings::normalise(is_array($old) ? $old : [])['enabled'];
+        $is = Settings::normalise(is_array($new) ? $new : [])['enabled'];
+        if ($was || !$is) {
+            return;
+        }
+        foreach ($this->wp->pendingCommentIds(self::RESUME_BATCH) as $id) {
+            try {
+                if ($this->reopen($id)) {
+                    $this->wp->setMeta($id, Meta::RETRY_AT, $this->wp->now());
+                    $this->wp->scheduleOnce($this->wp->now(), self::HOOK_RETRY, [$id]);
+                } else {
+                    $this->outcome->abandon($id);
+                }
+            } catch (\Throwable $e) {
+                // Left waiting: the sweep gives it the failure mode once its old timeout is past.
+                $this->outcome->failed(Log::STEP_SUBMIT, $id);
+            }
+        }
+    }
+
+    /**
      * Sends a comment again as its next revision, because its text is no longer the one
      * that was sent. A comment the plugin published under fail-open goes back to hold while
      * the new text is assessed.
@@ -223,7 +263,7 @@ final class Submission
         $this->wp->setMeta($id, Meta::WAITING, '1');
         $this->wp->setMeta($id, Meta::HELD_AT, $this->wp->now());
         foreach ([Meta::SUBMITTED_AT, Meta::RETRY_AT, Meta::ATTEMPTS, Meta::SENT_HASH, Meta::SENT_CHARS,
-            Meta::TIMED_OUT, Meta::ERROR] as $key) {
+            Meta::TIMED_OUT, Meta::ERROR, Meta::DECIDED_AT] as $key) {
             $this->wp->deleteMeta($id, $key);
         }
         return true;
@@ -295,8 +335,13 @@ final class Submission
         $key = $this->settings->apiKey();
         $plain = Text::plain((string)$comment->comment_content);
         $text = Text::cut($plain);
-        if ($text === '' || $key === '') {
-            // Nothing to assess, or nothing to assess it with: no verdict, no guess.
+        if (!$this->settings->usable()) {
+            // Nothing to assess it with, nor to check its verdict: no verdict, no guess.
+            $this->outcome->withoutVerdict($id, Meta::ERROR_NOT_CONFIGURED);
+            return self::REFUSED;
+        }
+        if ($text === '') {
+            // Nothing to assess: no verdict, no guess.
             $this->outcome->withoutVerdict($id, null);
             return self::REFUSED;
         }

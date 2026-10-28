@@ -425,6 +425,7 @@ final class Outcome
     private function settle(int $id, string $status): void
     {
         $this->wp->setMeta($id, Meta::STATUS, $status);
+        $this->wp->setMeta($id, Meta::DECIDED_AT, $this->wp->now());
         $this->wp->deleteMeta($id, Meta::RETRY_AT);
         $this->wp->deleteMeta($id, Meta::WAITING);
     }

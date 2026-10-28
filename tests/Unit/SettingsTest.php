@@ -228,14 +228,23 @@ final class SettingsTest extends PluginTestCase
         self::assertStringNotContainsString(self::KEY, $html);
     }
 
-    public function testASwitchedOnPluginWithoutASecretSaysSo(): void
+    public function testASwitchedOnPluginWithoutAUsableSecretSaysWhyOnEveryAdminScreen(): void
     {
         $this->configure();
-        WpStub::$options[Settings::SECRET_OPTION] = '';
+        WpStub::$options[Settings::SECRET_OPTION] = 'za-krotki';
         WpStub::$currentUser = 1;
         WpStub::$userCaps[1] = ['manage_options'];
+        self::assertFalse($this->plugin->settings->isActive());
 
-        self::assertStringContainsString('brakuje klucza API lub sekretu', $this->notices());
+        foreach ([null, 'edit-comments', 'dashboard'] as $screen) {
+            WpStub::$screen = $screen === null ? null : (object)['id' => $screen];
+            self::assertStringContainsString(esc_html(CommentsScreen::notConfiguredMessage()), $this->notices(), (string)$screen);
+        }
+        $this->page->registerSettings();
+        ob_start();
+        $this->page->render();
+        self::assertStringContainsString(esc_html(CommentsScreen::notConfiguredMessage()), (string)ob_get_clean());
+        self::assertStringNotContainsString('za-krotki', $this->notices());
     }
 
     public function testTheCommentsScreenShowsTheVerdictAndTheSupportCue(): void

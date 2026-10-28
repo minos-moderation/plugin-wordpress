@@ -194,7 +194,7 @@ final class SettingsPage
                 printf('<input type="checkbox" id="%s" name="%s" value="1" %s />', esc_attr($id),
                     esc_attr($input), checked($values[$name], true, false));
                 if ($name === 'enabled') {
-                    self::help(__('Po włączeniu każdy nowy komentarz (poza komentarzami moderatorów) jest wstrzymywany do czasu otrzymania werdyktu. Wtyczka działa dopiero, gdy zapisano klucz API i sekret webhooka. Po wyłączeniu wtyczka nic nie robi: nie wysyła komentarzy ani ponowień, nie przyjmuje werdyktów, a komentarze czekające na werdykt zostają w kolejce moderacji do decyzji człowieka.', 'minos-moderation'));
+                    self::help(__('Po włączeniu każdy nowy komentarz (poza komentarzami moderatorów) jest wstrzymywany do czasu otrzymania werdyktu. Bez poprawnego klucza API i sekretu webhooka komentarze nie są wysyłane, a każdy nowy komentarz od razu trafia do trybu „gdy brak werdyktu”. Po wyłączeniu wtyczka nic nie robi: nie wysyła komentarzy ani ponowień, nie przyjmuje werdyktów, a komentarze czekające na werdykt zostają w kolejce moderacji do decyzji człowieka. Ponowne włączenie wysyła je do oceny jeszcze raz, z nowym czasem oczekiwania.', 'minos-moderation'));
                 }
                 break;
             case 'gateway_url':
@@ -267,7 +267,7 @@ final class SettingsPage
         if ($this->settings->isActive()) {
             $state = __('Moderacja działa: nowe komentarze czekają na werdykt bramy.', 'minos-moderation');
         } elseif ($values['enabled']) {
-            $state = __('Moderacja jest włączona, ale brakuje klucza API lub sekretu webhooka — komentarze nie są wysyłane do oceny.', 'minos-moderation');
+            $state = CommentsScreen::notConfiguredMessage();
         } else {
             $state = __('Moderacja jest wyłączona — komentarze nie są wysyłane do oceny.', 'minos-moderation');
         }

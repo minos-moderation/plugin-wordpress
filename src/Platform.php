@@ -247,6 +247,49 @@ class Platform
     }
 
     /**
+     * Comments settled before a moment ({@see Meta::DECIDED_AT}), oldest first: a query by
+     * value, run hourly by {@see Retention} over the comments settled in the last 30 days and
+     * those it has not cleaned yet.
+     *
+     * @param int $before Unix seconds.
+     * @param int $limit  The most to return.
+     * @return array<int,int> Comment ids.
+     */
+    public function commentIdsDecidedBefore(int $before, int $limit): array
+    {
+        $ids = get_comments([
+            'status'       => 'any',
+            'meta_key'     => Meta::DECIDED_AT,
+            'meta_value'   => $before,
+            'meta_compare' => '<',
+            'meta_type'    => 'NUMERIC',
+            'fields'       => 'ids',
+            'number'       => $limit,
+            'orderby'      => 'comment_ID',
+            'order'        => 'ASC',
+        ]);
+        return array_map('intval', is_array($ids) ? $ids : []);
+    }
+
+    /**
+     * Every comment with a meta key, whatever its value: for a one-off upgrade only.
+     *
+     * @param string $key The meta key.
+     * @return array<int,int> Comment ids.
+     */
+    public function commentIdsWithMetaKey(string $key): array
+    {
+        $ids = get_comments([
+            'status'   => 'any',
+            'meta_key' => $key,
+            'fields'   => 'ids',
+            'orderby'  => 'comment_ID',
+            'order'    => 'ASC',
+        ]);
+        return array_map('intval', is_array($ids) ? $ids : []);
+    }
+
+    /**
      * Every comment with a meta value: a query by value, for a one-off upgrade only.
      *
      * @param string $key   The meta key.

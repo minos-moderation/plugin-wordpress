@@ -113,15 +113,19 @@ final class Plugin
                 'permission_callback' => '__return_true',
             ]);
         });
-        add_action('init', static function () use ($file, $sweeper): void {
+        $upgrade = new Upgrade($wp);
+        add_action('init', static function () use ($file, $sweeper, $upgrade): void {
             load_plugin_textdomain(self::TEXT_DOMAIN, false, dirname(plugin_basename($file)) . '/languages');
+            // An update replaces the files without activating the plugin again.
+            $upgrade->run();
             $sweeper->ensureScheduled();
         });
 
-        register_activation_hook($file, static function () use ($wp, $sweeper): void {
+        register_activation_hook($file, static function () use ($wp, $sweeper, $upgrade): void {
             // Created non-autoloaded, so the secrets are not loaded on every request.
             $wp->addOption(Settings::KEY_OPTION, '');
             $wp->addOption(Settings::SECRET_OPTION, '');
+            $upgrade->run();
             $sweeper->ensureScheduled();
         });
         register_deactivation_hook($file, static function () use ($wp): void {

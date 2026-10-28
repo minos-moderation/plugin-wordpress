@@ -104,6 +104,38 @@ final class ReceiverTest extends PluginTestCase
         self::assertTrue($this->pending($id));
     }
 
+    public function testASecretWrittenStraightIntoTheOptionIsCheckedAsTheSettingsCheckIt(): void
+    {
+        $this->configure();
+        $id = $this->post('Komentarz przy zbyt krótkim sekrecie.');
+        foreach (['12345678', 'sekret ze spacją 0123456789', str_repeat('x', 257)] as $invalid) {
+            self::assertFalse(Settings::validSecret($invalid), 'the settings page refuses it');
+            WpStub::$options[Settings::SECRET_OPTION] = $invalid;
+
+            self::assertSame(401, $this->deliver(self::verdict($id, 'bezpieczne'), $invalid), $invalid);
+        }
+        self::assertTrue($this->pending($id));
+    }
+
+    public function testTheGatewaysSignatureVectorWithAValidSecretIs200(): void
+    {
+        // The gateway's vector, copied byte for byte into the client library.
+        $vector = json_decode((string)file_get_contents(__DIR__ . '/../../vendor/minos-moderation/client-php/vectors/signature.json'), true);
+        self::assertIsArray($vector, 'run composer install');
+        $this->configure();
+        WpStub::$options[Settings::SECRET_OPTION] = $vector['secret'];
+        self::assertTrue(Settings::validSecret($vector['secret']));
+        $this->now = (int)$vector['timestamp'];
+
+        $request = new \WP_REST_Request('POST');
+        $request->set_body($vector['body']);
+        $request->set_header('X-Wergiliusz-Podpis', $vector['header']);
+        self::assertSame(200, $this->plugin->receiver->handle($request)->get_status());
+
+        $request->set_body($vector['body'] . ' ');
+        self::assertSame(401, $this->plugin->receiver->handle($request)->get_status(), 'and only the signed bytes');
+    }
+
     public function testASignedBodyThatIsNotAPayloadIs400(): void
     {
         $this->configure();

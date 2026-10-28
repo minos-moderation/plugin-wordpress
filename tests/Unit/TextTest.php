@@ -69,6 +69,40 @@ final class TextTest extends PluginTestCase
         self::assertSame('0', $this->field($id, 'comment_approved'));
     }
 
+    public function testABlockBoundarySeparatesWordsAndAnInlineTagJoinsNone(): void
+    {
+        foreach (['blockquote', 'p', 'div', 'li', 'ul', 'ol', 'pre', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'] as $tag) {
+            foreach (["<{$tag}>Zgoda</{$tag}>zakazane", "Zgoda<{$tag} class=\"x\">zakazane"] as $html) {
+                self::assertSame(['Zgoda', 'zakazane'], preg_split('/\s+/u', Text::plain($html)), $html);
+            }
+        }
+        foreach (['Zgoda<br>zakazane', 'Zgoda<br/>zakazane', 'Zgoda<BR class="x" />zakazane'] as $html) {
+            self::assertSame("Zgoda\nzakazane", Text::plain($html), $html);
+        }
+        // Inline tags, and tags whose names only begin like a block tag's.
+        foreach (['strong', 'b', 'em', 'i', 'span', 'code', 'del', 'big', 'bdo', 'param', 'hr', 'pa'] as $tag) {
+            self::assertSame('zakazane', Text::plain("zak<{$tag}>a</{$tag}>zane"), $tag);
+        }
+        self::assertSame('zakazane', Text::plain('zak<a href="https://a.example/">a</a>zane'));
+    }
+
+    public function testTheTextOfTitleAndAltIsStillKeptInPlace(): void
+    {
+        self::assertSame(['ukryte', 'słowo', 'ok'], preg_split('/\s+/u', Text::plain('<abbr title="ukryte słowo">ok</abbr>')));
+        self::assertSame(['tekst', 'obraz', 'alt', 'dalej'],
+            preg_split('/\s+/u', Text::plain('tekst <img src="x.png" alt="obraz alt"> dalej')));
+        self::assertSame(['zakazane', 'link'],
+            preg_split('/\s+/u', Text::plain('<p title="zakazane">link</p>')), 'a block tag with a title keeps it');
+    }
+
+    public function testAQuotedWordIsSentApartFromTheNextOne(): void
+    {
+        $this->configure();
+        $this->post('<blockquote>Zgoda</blockquote>zakazane');
+
+        self::assertSame(['Zgoda', 'zakazane'], preg_split('/\s+/u', $this->sentBody()['elementy'][0]['tekst']));
+    }
+
     public function testAMaskFitsOnlyAsTheSentTextWithCharactersTurnedIntoBlocks(): void
     {
         $sent = 'Żółw ma brzydkie słowo';

@@ -8,6 +8,7 @@ use Minos\WordPress\Meta;
 use Minos\WordPress\Settings;
 use Minos\WordPress\Submission;
 use Minos\WordPress\Sweeper;
+use Minos\WordPress\Upgrade;
 use WpStub;
 
 /**
@@ -134,6 +135,53 @@ final class SweeperTest extends PluginTestCase
         do_action(Sweeper::HOOK);
 
         self::assertSame(Sweeper::MAX_SUBMISSIONS, count(WpStub::$requests) - $before);
+    }
+
+    public function testTheSweepFindsWaitingCommentsByTheirKeyAloneAndNeverTheSettledOnes(): void
+    {
+        $this->configure();
+        $settled = $this->post('Komentarz już oceniony.');
+        $this->deliver(self::verdict($settled, 'bezpieczne'));
+        $waiting = $this->post('Komentarz czekający na werdykt.');
+        self::assertNull($this->field($settled, Meta::WAITING), 'settled: no longer marked');
+        self::assertSame('1', $this->field($waiting, Meta::WAITING));
+        WpStub::$queries = [];
+
+        self::assertSame([$waiting], $this->plugin->wp->pendingCommentIds(Sweeper::BATCH));
+        do_action(Sweeper::HOOK);
+
+        self::assertNotEmpty(WpStub::$queries, 'the sweep queried comments');
+        foreach (WpStub::$queries as $query) {
+            self::assertSame(Meta::WAITING, $query['meta_key'] ?? null);
+            self::assertArrayNotHasKey('meta_value', $query, 'never a query by meta value');
+            self::assertArrayNotHasKey('meta_query', $query);
+        }
+    }
+
+    public function testAnUpdateMarksTheCommentsThatWereWaitingBeforeIt(): void
+    {
+        $this->configure(['failure_mode' => Settings::FAIL_CLOSED]);
+        $waiting = $this->post('Komentarz czekający przed aktualizacją.');
+        $settled = $this->post('Komentarz oceniony przed aktualizacją.');
+        $this->deliver(self::verdict($settled, 'bezpieczne'));
+        // What the previous version stored: no waiting mark, no data version.
+        unset(WpStub::$meta[$waiting][Meta::WAITING], WpStub::$options[Upgrade::OPTION]);
+        self::assertSame([], $this->plugin->wp->pendingCommentIds(Sweeper::BATCH), 'invisible to the sweep');
+
+        do_action('init');
+
+        self::assertSame('1', $this->field($waiting, Meta::WAITING));
+        self::assertNull($this->field($settled, Meta::WAITING));
+        self::assertSame(Upgrade::VERSION, WpStub::$options[Upgrade::OPTION]);
+        self::assertTrue(WpStub::$autoload[Upgrade::OPTION], 'read on every request, so autoloaded');
+        $this->now += Settings::DEFAULT_TIMEOUT_MIN * 60;
+        do_action(Sweeper::HOOK);
+        self::assertSame(Meta::UNASSESSED, $this->field($waiting, Meta::STATUS), 'the sweep finds it again');
+
+        // Once done, an update step never runs again.
+        WpStub::$queries = [];
+        do_action('init');
+        self::assertSame([], WpStub::$queries);
     }
 
     public function testACommentAPersonDecidedIsNotChangedByTheTimeout(): void

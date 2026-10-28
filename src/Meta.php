@@ -18,6 +18,13 @@ final class Meta
     /** Where the comment stands: {@see PENDING} or the verdict (`bezpieczne`…`nieocenione`). */
     public const STATUS = '_minos_status';
 
+    /**
+     * `1` while the comment waits for its verdict ({@see STATUS} is {@see PENDING}), and gone
+     * once it is settled: the sweep finds waiting comments by this key alone, never by a
+     * meta value, so its query does not grow with every comment ever assessed.
+     */
+    public const WAITING = '_minos_waiting';
+
     /** When the plugin held the comment for assessment, or for its current revision (unix seconds). */
     public const HELD_AT = '_minos_held_at';
 
@@ -88,7 +95,7 @@ final class Meta
 
     /** Every key above: what `uninstall.php` deletes. */
     public const ALL = [
-        self::STATUS, self::HELD_AT, self::REVISION, self::SUBMITTED_AT, self::WP_APPROVED, self::RETRY_AT,
+        self::STATUS, self::WAITING, self::HELD_AT, self::REVISION, self::SUBMITTED_AT, self::WP_APPROVED, self::RETRY_AT,
         self::ATTEMPTS, self::ORIGINAL, self::MASKED, self::SUPPORT, self::CATEGORIES, self::ERROR,
         self::SENT_CHARS, self::SENT_HASH, self::CUT, self::AUTO_PUBLISHED, self::TIMED_OUT,
     ];

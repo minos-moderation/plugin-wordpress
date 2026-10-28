@@ -15,7 +15,8 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
 | `src/Receiver.php` | The REST webhook `minos/v1/webhook`: `404` while switched off; raw body, `Signature::verify`, `WebhookPayload::parse`, dedupe. |
 | `src/Outcome.php` | Applies a verdict (on time or late) or the failure mode; verified masked writes; the held-back moderator e-mail. |
 | `src/Sweeper.php` | WP-Cron every 5 minutes: the receive timeout and due retries. |
-| `src/Text.php` | Plain text for the gateway (strip, keep `title`/`alt` text, decode, trim, cut at 3000), link domains, and back to safe HTML. |
+| `src/Text.php` | Plain text for the gateway (strip, keep `title`/`alt` text, block tags as line breaks, decode, trim, cut at 3000), link domains, whether a masked text fits, and back to safe HTML. |
+| `src/Upgrade.php` | Brings data an earlier version stored up to date, once per site (`minos_moderation_schema`). |
 | `src/Log.php` | The administrator's error log: codes and statuses, never content or secrets. |
 | `src/Notice.php` | The privacy (RODO) notice under the comment form. |
 | `src/Admin/` | Settings → Minos, the "Minos" comments column and the admin notices. |
@@ -60,7 +61,9 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
    WordPress held back goes out from WP-Cron.
 5. The sweep gives the failure mode to a comment that waited past the timeout (at least
    20 minutes), counted from the gateway's `202`, or from the hold while it was never
-   accepted.
+   accepted. It finds waiting comments by the meta key `_minos_waiting` alone, set while a
+   comment waits and removed when it is settled, never by a meta value (`_minos_status`
+   stays, and grows with every comment ever assessed).
 
 With `enabled` off the plugin does nothing: no hold, no submission, no retry, no sweep, and
 the webhook answers `404`. Waiting comments stay in WordPress's queue for a person.
@@ -85,6 +88,11 @@ Decisions worth knowing before changing anything:
   the receiver compares `_minos_sent_hash` with the current text; a mismatch (a write
   without `edit_comment`) sends the next revision instead of applying the verdict. The
   plugin's own masked write is not an edit (`Outcome::writing`).
+- **Block boundaries.** `Text::plain` turns block tags (`blockquote`, `p`, `div`, `li`,
+  `ul`, `ol`, `pre`, `h1`–`h6`, `br`) into line breaks after the `title`/`alt` text is
+  taken out, and drops inline tags without a trace: `<blockquote>Zgoda</blockquote>zakazane`
+  is sent as two words, `zak<b>a</b>zane` as one. The changed text changes the hash of
+  comments in flight during an update; their verdicts then send the next revision instead.
 - **The plain text never goes empty by accident.** An empty text gets the failure mode,
   so a regex in `Text` that gives up (a PCRE limit returns null) falls back to its input,
   and trimming is a byte scan over the 26 characters PCRE calls whitespace, not a regex
@@ -225,8 +233,12 @@ bin/build-zip.sh            # → build/minos-moderation.zip
 
 It copies the entry points, `src/`, `LICENSE`, `README.md` and the composer files into a
 staging directory, runs `composer install --no-dev --classmap-authoritative`, removes
-`composer.json`, `composer.lock` and `vendor/composer/installed.json` (the plugin directory
-is served, and they would publish the exact versions), strips the client library down to its `src/` and `LICENSE` (its mock
+`composer.json`, `composer.lock` and `vendor/composer/installed.json` (static files, readable
+as text where the plugin directory is served, that list the exact versions; nothing reads
+them at run time), keeps `vendor/composer/installed.php` (PHP code returning an array, which
+`Composer\InstalledVersions` reads when asked for the installed versions; requested over
+HTTP it prints nothing, and it names only the commit of the public, MIT-licensed client
+library), strips the client library down to its `src/` and `LICENSE` (its mock
 gateway has a `public/index.php` that must never be reachable on a forum's server),
 refuses to package any development or composer file, lints every PHP file, and zips
 `minos-moderation/`.

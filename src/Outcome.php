@@ -426,6 +426,7 @@ final class Outcome
     {
         $this->wp->setMeta($id, Meta::STATUS, $status);
         $this->wp->deleteMeta($id, Meta::RETRY_AT);
+        $this->wp->deleteMeta($id, Meta::WAITING);
     }
 
     /**

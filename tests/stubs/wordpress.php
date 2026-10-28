@@ -42,6 +42,9 @@ final class WpStub
     /** @var array<int,array{url:string,args:array}> Every `wp_remote_post`. */
     public static $requests = [];
 
+    /** @var array<int,array<string,mixed>> The arguments of every `get_comments`. */
+    public static $queries = [];
+
     /** @var array<int,array|WP_Error> Answers for the next `wp_remote_post` calls. */
     public static $responses = [];
 
@@ -99,6 +102,7 @@ final class WpStub
         self::$comments = [];
         self::$meta = [];
         self::$requests = [];
+        self::$queries = [];
         self::$responses = [];
         self::$network = false;
         self::$events = [];
@@ -358,6 +362,7 @@ function get_comment($comment = null, $output = OBJECT)
  */
 function get_comments($args = [])
 {
+    WpStub::$queries[] = $args;
     $statuses = ['approve' => ['1'], 'hold' => ['0'], 'all' => ['0', '1'], 'spam' => ['spam'], 'trash' => ['trash']];
     $status = $args['status'] ?? 'all';
     $found = [];

@@ -220,6 +220,7 @@ final class Submission
         }
         $this->wp->setMeta($id, Meta::REVISION, (int)$this->wp->meta($id, Meta::REVISION) + 1);
         $this->wp->setMeta($id, Meta::STATUS, Meta::PENDING);
+        $this->wp->setMeta($id, Meta::WAITING, '1');
         $this->wp->setMeta($id, Meta::HELD_AT, $this->wp->now());
         foreach ([Meta::SUBMITTED_AT, Meta::RETRY_AT, Meta::ATTEMPTS, Meta::SENT_HASH, Meta::SENT_CHARS,
             Meta::TIMED_OUT, Meta::ERROR] as $key) {
@@ -372,6 +373,7 @@ final class Submission
             return;
         }
         $this->wp->setMeta($id, Meta::STATUS, Meta::PENDING);
+        $this->wp->setMeta($id, Meta::WAITING, '1');
         $this->wp->setMeta($id, Meta::HELD_AT, $this->wp->now());
         $this->wp->setMeta($id, Meta::WP_APPROVED, $wordpress);
         $this->submitIsolated($id);

@@ -49,7 +49,9 @@ przy Twoim kluczu — brama nigdy nie wysyła werdyktu pod adres podany w samym 
 Jeśli używasz wtyczki bezpieczeństwa, która blokuje REST API dla niezalogowanych, dopuść
 trasę `minos/v1/webhook`. Ta trasa nie wymaga logowania: każde doręczenie jest podpisane
 sekretem webhooka, a wtyczka odrzuca (HTTP 401) wszystko, czego podpis się nie zgadza albo
-różni się od zegara serwera o więcej niż 5 minut.
+różni się od zegara serwera o więcej niż 5 minut — oraz każde doręczenie, gdy zapisany
+sekret nie spełnia warunków formularza (16–256 widocznych znaków ASCII), np. wpisany ręcznie
+do bazy.
 
 ## Ustawienia
 
@@ -175,7 +177,8 @@ Wysyłane są wyłącznie:
 - identyfikator komentarza w postaci `wp:<numer>` (sam numer, bez treści), a dla tekstu
   zmienionego przed oceną `wp:<numer>.<wersja>`;
 - tekst komentarza bez znaczników HTML, razem z tekstem atrybutów `title` i `alt`
-  (czytelnik też go widzi) — **pierwsze 3000 znaków**: dłuższy komentarz jest oceniany na
+  (czytelnik też go widzi), z granicami akapitów, cytatów, list i nagłówków jako nowymi
+  wierszami (tak jak widzi je czytelnik) — **pierwsze 3000 znaków**: dłuższy komentarz jest oceniany na
   podstawie pierwszych 3000 znaków, a dalsza część nie jest oceniana (patrz „Jak to
   działa”);
 - wybrany profil oceny;

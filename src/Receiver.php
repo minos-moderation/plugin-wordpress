@@ -18,7 +18,8 @@ defined('ABSPATH') || exit;
  * Otherwise the contract's receiving checklist, in order:
  * 1. the raw body, as the bytes arrived (`WP_REST_Request::get_body()` is `php://input`),
  *    never the re-encoded parameters;
- * 2. `X-Wergiliusz-Podpis` verified by the bundled `Signature::verify` — `401` otherwise, and
+ * 2. `X-Wergiliusz-Podpis` verified by the bundled `Signature::verify`, with a secret that
+ *    passes the same check as saving it (`Settings::validSecret`) — `401` otherwise, and
  *    the gateway retries;
  * 3. `WebhookPayload::parse` — `400` for a body that is not a payload; an id the verdict can
  *    no longer change (unknown, handled already — deliveries repeat —, decided by a person,
@@ -90,7 +91,9 @@ final class Receiver
         $body = (string)$request->get_body();
         $header = $request->get_header(Signature::HEADER);
         $secret = $this->settings->webhookSecret();
-        if ($secret === '' || !is_string($header)
+        // The same check as saving the secret: one written straight into the option (too
+        // short, empty, with spaces) authenticates nothing.
+        if (!Settings::validSecret($secret) || !is_string($header)
             || !Signature::verify($secret, $header, $body, $this->wp->now())) {
             return $this->wp->response(401);
         }

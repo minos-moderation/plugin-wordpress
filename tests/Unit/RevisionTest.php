@@ -92,6 +92,21 @@ final class RevisionTest extends PluginTestCase
         self::assertTrue($this->pending($id));
     }
 
+    public function testACommentSentBeforeTheBlockBoundariesIsSentAgainNotJudgedOnTheOldText(): void
+    {
+        $this->configure();
+        $id = $this->post('<blockquote>Zgoda</blockquote>zakazane');
+        // What an earlier version sent: the words glued together.
+        WpStub::$meta[$id][Meta::SENT_HASH] = hash('sha256', 'Zgodazakazane');
+        $before = count(WpStub::$requests);
+
+        self::assertSame(200, $this->deliver(self::verdict($id, 'bezpieczne')));
+
+        self::assertSame('0', $this->field($id, 'comment_approved'));
+        self::assertSame(['wp:' . $id . '.1'], $this->idsSentFrom($before));
+        self::assertSame(['Zgoda', 'zakazane'], preg_split('/\s+/u', $this->sentBody()['elementy'][0]['tekst']));
+    }
+
     public function testAVerdictForAnotherRevisionIs200AndChangesNothing(): void
     {
         $this->configure();

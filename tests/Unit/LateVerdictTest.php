@@ -68,8 +68,14 @@ final class LateVerdictTest extends PluginTestCase
 
         $refused = $this->autoPublished('no to jest głupi pomysł', ['censored_mode' => Settings::CENSORED_PUBLISH]);
         $this->deliver(self::verdict($refused, 'ocenzurowane', ['ocenzurowany' => str_repeat("'", 11000)]));
-        self::assertSame('0', $this->field($refused, 'comment_approved'), 'a masked text that cannot be stored unpublishes');
+        self::assertSame('0', $this->field($refused, 'comment_approved'), 'a masked text that does not fit unpublishes');
         self::assertSame('no to jest głupi pomysł', $this->field($refused, 'comment_content'));
+        self::assertSame(str_repeat("'", 11000), $this->field($refused, Meta::MASKED), 'kept for the moderator');
+
+        $short = $this->autoPublished('no to jest głupi pomysł', ['censored_mode' => Settings::CENSORED_PUBLISH]);
+        $this->deliver(self::verdict($short, 'ocenzurowane', ['ocenzurowany' => 'no to jest ████ pomysł']));
+        self::assertSame('0', $this->field($short, 'comment_approved'), 'a mask one character short unpublishes');
+        self::assertSame('no to jest ████ pomysł', $this->field($short, Meta::MASKED));
     }
 
     public function testALateSafeOrUnassessedVerdictLeavesItPublished(): void

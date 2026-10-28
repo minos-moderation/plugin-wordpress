@@ -69,6 +69,27 @@ final class TextTest extends PluginTestCase
         self::assertSame('0', $this->field($id, 'comment_approved'));
     }
 
+    public function testAMaskFitsOnlyAsTheSentTextWithCharactersTurnedIntoBlocks(): void
+    {
+        $sent = 'Żółw ma brzydkie słowo';
+        self::assertTrue(Text::maskFits($sent, 'Żółw ma ████████ słowo'));
+        self::assertTrue(Text::maskFits($sent, str_repeat('█', mb_strlen($sent, 'UTF-8'))), 'every character may be masked');
+        self::assertTrue(Text::maskFits($sent, $sent), 'masking nothing changes nothing');
+        self::assertFalse(Text::maskFits($sent, 'Żółw ma ███████ słowo'), 'one character short');
+        self::assertFalse(Text::maskFits($sent, 'Zółw ma ████████ słowo'), 'another character');
+        self::assertFalse(Text::maskFits('', ''), 'nothing was sent');
+        self::assertFalse(Text::maskFits($sent, "Żółw ma \xff███████ słowo"), 'not UTF-8');
+    }
+
+    public function testOnlyPlainContentIsPlain(): void
+    {
+        self::assertTrue(Text::isPlain('Tom &amp; Jerry &lt;3'));
+        self::assertTrue(Text::isPlain("dwa wiersze\ntekstu "));
+        self::assertFalse(Text::isPlain('no to jest <em>głupi</em> pomysł'));
+        self::assertFalse(Text::isPlain('<a href="https://a.example/">link</a>'));
+        self::assertFalse(Text::isPlain('<abbr title="ukryty">skrót</abbr>'));
+    }
+
     public function testASixtyThousandSpaceCommentKeepsItsText(): void
     {
         $this->configure(['failure_mode' => Settings::FAIL_OPEN]);

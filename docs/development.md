@@ -75,10 +75,16 @@ Decisions worth knowing before changing anything:
   3000 characters: `bezpieczne` gets the failure mode, `ocenzurowane` is held.
 - **The masked text is plain text, and verified.** `Outcome` escapes it with
   `htmlspecialchars` and writes it only when the comment still reads exactly as the text
-  that was sent (`_minos_sent_chars` and `_minos_sent_hash`). It counts only when
+  that was sent (`_minos_sent_chars` and `_minos_sent_hash`), the stored content is plain
+  text (`Text::isPlain`: its plain text is what a reader sees, so no markup, link or
+  attribute text is lost), the masked text fits the sent one (`Text::maskFits`: the same
+  number of characters, each the sent one or `█`), and WordPress itself would publish the
+  comment (`_minos_wp_approved` is `1`). Every other `ocenzurowane` is held with the
+  gateway's masked text in `_minos_masked`, shown in the "Minos" column. It counts only when
   `wp_update_comment` reports success AND a re-read finds exactly the masked HTML: wpdb
   refuses a value over the `text` column's 65,535 bytes (escaping can multiply the length
-  by six) and filters may change it. On a failure the original is put back if needed,
+  by six, though a fitting mask of 3000 characters stays far below) and filters may change
+  it. On a failure the original is put back if needed,
   `_minos_original` goes once the content is the original again, the comment stays held
   and `zapis_zamaskowanej_nieudany` is recorded (meta and log).
 - **Slashes.** `wp_update_comment` and `update_comment_meta` unslash their input, so

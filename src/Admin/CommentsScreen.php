@@ -112,6 +112,12 @@ final class CommentsScreen
         if ($this->wp->meta($id, Meta::ORIGINAL) !== '') {
             echo '<br /><small>' . esc_html__('treść zastąpiona wersją zamaskowaną; oryginał zachowano', 'minos-moderation') . '</small>';
         }
+        $masked = $this->wp->meta($id, Meta::MASKED);
+        if ($masked !== '') {
+            // Plain text from the gateway, shown as text.
+            echo '<details><summary><small>' . esc_html__('wersja zamaskowana od bramy (nieopublikowana)', 'minos-moderation')
+                . '</small></summary><small class="minos-moderation-masked">' . esc_html($masked) . '</small></details>';
+        }
         if ($this->wp->meta($id, Meta::SUPPORT) === '1') {
             echo '<p><strong>' . esc_html__('Sygnał wsparcia:', 'minos-moderation') . '</strong> '
                 . esc_html(self::supportAdvice()) . '</p>';

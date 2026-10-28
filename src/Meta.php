@@ -36,6 +36,12 @@ final class Meta
     /** The original content of a comment the plugin published in its masked form. */
     public const ORIGINAL = '_minos_original';
 
+    /**
+     * The gateway's masked text (`ocenzurowany`) of a comment the plugin held instead of
+     * publishing it masked, shown to the moderator in the "Minos" column.
+     */
+    public const MASKED = '_minos_masked';
+
     /** `1` when the gateway flagged the comment for support (`wsparcie`). */
     public const SUPPORT = '_minos_wsparcie';
 
@@ -67,7 +73,7 @@ final class Meta
     /** Every key above: what `uninstall.php` deletes. */
     public const ALL = [
         self::STATUS, self::HELD_AT, self::SUBMITTED_AT, self::WP_APPROVED, self::RETRY_AT,
-        self::ATTEMPTS, self::ORIGINAL, self::SUPPORT, self::CATEGORIES, self::ERROR,
+        self::ATTEMPTS, self::ORIGINAL, self::MASKED, self::SUPPORT, self::CATEGORIES, self::ERROR,
         self::SENT_CHARS, self::SENT_HASH, self::CUT, self::AUTO_PUBLISHED,
     ];
 

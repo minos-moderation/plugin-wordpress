@@ -112,9 +112,7 @@ final class EndToEndTest extends TestCase
         self::assertSame(['1', 'bezpieczne'], [$approved($ids['safe']), $status($ids['safe'])]);
         self::assertSame(['0', 'zablokowane'], [$approved($ids['blocked']), $status($ids['blocked'])]);
         self::assertSame('nekanie', WpStub::$meta[$ids['blocked']][Meta::CATEGORIES]);
-        self::assertSame(['1', 'ocenzurowane'], [$approved($ids['censored']), $status($ids['censored'])]);
-        self::assertSame('To jest ████████ komentarz [minos:cenzuruj]', WpStub::$comments[$ids['censored']]['comment_content']);
-        self::assertSame('To jest [[paskudny]] komentarz [minos:cenzuruj]', WpStub::$meta[$ids['censored']][Meta::ORIGINAL]);
+        $this->assertTheMaskIsPublishedOnlyWhenItFits($ids['censored'], 'To jest [[paskudny]] komentarz [minos:cenzuruj]');
         self::assertSame(['0', Meta::UNASSESSED], [$approved($ids['none']), $status($ids['none'])]);
         self::assertSame('1', WpStub::$meta[$ids['support']][Meta::SUPPORT]);
         self::assertSame(['1', 'bezpieczne'], [$approved($ids['twice']), $status($ids['twice'])]);
@@ -129,6 +127,61 @@ final class EndToEndTest extends TestCase
         // signatures were refused (the mock retries them later).
         $answers = array_count_values(file($state . '.log', FILE_IGNORE_NEW_LINES) ?: []);
         self::assertSame(['200' => 7, '401' => 2], $answers);
+    }
+
+    /**
+     * The masked comment, as a property of what was sent: published only as the sent text
+     * with characters turned into `█` (the same length, nothing else changed); a masked text
+     * of any other shape holds the comment, with the mask kept for the moderator. Which of
+     * the two happens depends on the mock the client library bundles.
+     *
+     * @param int    $id       The comment.
+     * @param string $original Its content.
+     */
+    private function assertTheMaskIsPublishedOnlyWhenItFits(int $id, string $original): void
+    {
+        $sent = null;
+        foreach (WpStub::$requests as $request) {
+            $item = json_decode($request['args']['body'], true)['elementy'][0];
+            if ($item['id'] === 'wp:' . $id) {
+                $sent = $item['tekst'];
+            }
+        }
+        self::assertIsString($sent, 'the censored comment was sent');
+        self::assertSame('ocenzurowane', WpStub::$meta[$id][Meta::STATUS] ?? null);
+        $content = WpStub::$comments[$id]['comment_content'];
+        if (WpStub::$comments[$id]['comment_approved'] === '1') {
+            $published = html_entity_decode($content, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+            self::assertSame(mb_strlen($sent, 'UTF-8'), mb_strlen($published, 'UTF-8'));
+            self::assertTrue(self::onlyMasked($sent, $published), $published);
+            self::assertNotSame($sent, $published, 'something was masked');
+            self::assertSame($original, WpStub::$meta[$id][Meta::ORIGINAL]);
+            return;
+        }
+        $mask = WpStub::$meta[$id][Meta::MASKED] ?? null;
+        self::assertIsString($mask, 'a held censored comment keeps the mask');
+        self::assertFalse(self::onlyMasked($sent, $mask), 'held although the mask fits: ' . $mask);
+        self::assertSame('0', WpStub::$comments[$id]['comment_approved']);
+        self::assertSame($original, $content);
+    }
+
+    /**
+     * Whether a text is the sent text with some characters turned into `█`, and nothing else
+     * changed (the test's own reading, independent of the plugin's).
+     */
+    private static function onlyMasked(string $sent, string $masked): bool
+    {
+        $a = preg_split('//u', $sent, -1, PREG_SPLIT_NO_EMPTY);
+        $b = preg_split('//u', $masked, -1, PREG_SPLIT_NO_EMPTY);
+        if (!is_array($a) || !is_array($b) || count($a) !== count($b)) {
+            return false;
+        }
+        foreach ($b as $i => $char) {
+            if ($char !== $a[$i] && $char !== '█') {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

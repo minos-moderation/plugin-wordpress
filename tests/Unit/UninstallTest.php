@@ -28,8 +28,11 @@ final class UninstallTest extends PluginTestCase
         WpStub::answer(429, ['blad' => ['kod' => 'kolejka_pelna', 'ponow_za_s' => 60]]);
         $retrying = $this->post('Komentarz czekający na ponowienie.');
         $censored = $this->post('brzydki komentarz');
-        $this->deliver(self::verdict($censored, 'ocenzurowane', ['ocenzurowany' => '████████ komentarz',
+        $this->deliver(self::verdict($censored, 'ocenzurowane', ['ocenzurowany' => '███████ komentarz',
             'kategorie' => ['wulgaryzmy'], 'wsparcie' => true]));
+        $heldMasked = $this->post('<em>brzydki</em> komentarz');
+        $this->deliver(self::verdict($heldMasked, 'ocenzurowane', ['ocenzurowany' => '███████ komentarz']));
+        self::assertSame('███████ komentarz', $this->field($heldMasked, Meta::MASKED), 'the scenario stores every kind of meta');
         WpStub::$options['inna_wtyczka'] = 'zostaje';
         WpStub::$meta[$censored]['_inna_wtyczka'] = 'zostaje';
         WpStub::$events[] = ['at' => $this->now, 'hook' => 'inna_wtyczka_cron', 'args' => [], 'recurrence' => null];
@@ -41,7 +44,8 @@ final class UninstallTest extends PluginTestCase
         self::assertSame(['inna_wtyczka' => 'zostaje'], WpStub::$options);
         self::assertSame([$censored => ['_inna_wtyczka' => 'zostaje']], array_filter(WpStub::$meta));
         self::assertSame(['inna_wtyczka_cron'], array_column(WpStub::$events, 'hook'));
-        self::assertSame('████████ komentarz', $this->field($censored, 'comment_content'), 'a masked comment stays masked');
+        self::assertSame('███████ komentarz', $this->field($censored, 'comment_content'), 'a masked comment stays masked');
+        self::assertSame('<em>brzydki</em> komentarz', $this->field($heldMasked, 'comment_content'));
         self::assertSame('0', $this->field($retrying, 'comment_approved'), 'a waiting comment stays held');
         self::assertSame('0', $this->field($refused, 'comment_approved'));
     }

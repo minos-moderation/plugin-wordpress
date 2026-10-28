@@ -62,7 +62,7 @@ różni się od zegara serwera o więcej niż 5 minut.
 | Profil oceny | `forum_adult` | `forum_adult` — forum dla dorosłych; `forum_teen` — forum z udziałem nastolatków. Klucz musi mieć dostęp do wybranego profilu. |
 | Gdy brak werdyktu | fail-closed | Co zrobić z komentarzem bez werdyktu: **fail-open** — opublikować, **fail-closed** — zostawić do ręcznej moderacji. Patrz niżej. |
 | Czas oczekiwania na werdykt | 20 min (najmniej 20) | Po tym czasie komentarz bez werdyktu trafia do trybu „Gdy brak werdyktu”. Brama próbuje doręczyć werdykt przez 15 minut, stąd najmniej 20 minut. Werdykt, który nadejdzie później, jest stosowany do komentarza opublikowanego przy fail-open (patrz niżej). |
-| Komentarz ocenzurowany | opublikuj wersję zamaskowaną | Opublikować tekst z fragmentami zastąpionymi znakami `█` albo zostawić komentarz do ręcznej moderacji. Oryginał zostaje zachowany w danych komentarza. Komentarz dłuższy niż 3000 znaków zawsze zostaje do moderacji. |
+| Komentarz ocenzurowany | opublikuj wersję zamaskowaną | Opublikować tekst z fragmentami zastąpionymi znakami `█` albo zostawić komentarz do ręcznej moderacji. Oryginał zostaje zachowany w danych komentarza. Komentarz dłuższy niż 3000 znaków, komentarz z formatowaniem lub odnośnikami i komentarz, którego wersja zamaskowana nie pasuje do wysłanego tekstu, zawsze zostaje do moderacji (z wersją zamaskowaną w kolumnie **Minos**). |
 | Komentarz zablokowany | zostaw do ręcznej moderacji | Zostawić do moderacji albo oznaczyć jako spam. |
 | Pokazuj informację | włączona | Informacja pod formularzem komentarza (RODO), patrz niżej. |
 | Treść informacji | tekst domyślny | Zwykły tekst; puste pole oznacza tekst domyślny. |
@@ -79,9 +79,13 @@ różni się od zegara serwera o więcej niż 5 minut.
    - **bezpieczne** — publikuje komentarz;
    - **ocenzurowane** — publikuje wersję z zamaskowanymi fragmentami albo zostawia
      komentarz do moderacji (ustawienie); do moderacji trafia też wtedy, gdy brama nie
-     odesłała wersji zamaskowanej, gdy moderator zdążył zmienić treść albo gdy WordPress
-     nie zapisał wersji zamaskowanej (wtedy w kolumnie **Minos** pojawia się informacja
-     o błędzie zapisu) — oryginał nigdy nie jest publikowany zamiast wersji zamaskowanej;
+     odesłała wersji zamaskowanej, gdy wersja zamaskowana nie ma dokładnie długości
+     wysłanego tekstu albo zmienia w nim coś poza zakrytymi znakami, gdy komentarz ma
+     formatowanie lub odnośniki, gdy WordPress sam wstrzymałby komentarz, gdy moderator
+     zdążył zmienić treść albo gdy WordPress nie zapisał wersji zamaskowanej (wtedy
+     w kolumnie **Minos** pojawia się informacja o błędzie zapisu) — oryginał nigdy nie
+     jest publikowany zamiast wersji zamaskowanej, a wersję zamaskowaną komentarza
+     wstrzymanego widać w kolumnie **Minos**;
    - **zablokowane** — zostawia do moderacji albo oznacza jako spam (ustawienie);
    - **nieocenione** — tryb „Gdy brak werdyktu”.
 4. Werdykt i kategorie (np. `wulgaryzmy`, `spam`) widać w kolumnie **Minos** na liście
@@ -113,8 +117,11 @@ Zasady, które obowiązują zawsze:
   moderację” o komentarzu, który czeka tylko na werdykt. Wiadomość przychodzi dopiero
   wtedy, gdy po werdykcie komentarz zostaje w moderacji; autor wpisu dostaje jedno
   powiadomienie o opublikowanym komentarzu, tak jak bez wtyczki.
-- **Zamaskowany tekst** jest publikowany jako zwykły tekst — bez formatowania
-  i odnośników z oryginału.
+- **Zamaskowany tekst** jest publikowany jako zwykły tekst i tylko w miejsce komentarza,
+  który sam jest zwykłym tekstem: wersja zamaskowana musi mieć dokładnie tyle znaków, ile
+  wysłany tekst, i różnić się od niego wyłącznie znakami `█`. Komentarz z formatowaniem
+  (pogrubienie, cytat, odnośnik) trafia do moderatora, a zamaskowany tekst widać
+  w kolumnie **Minos**.
 
 ## Fail-open i fail-closed
 

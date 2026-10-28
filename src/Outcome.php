@@ -22,9 +22,12 @@ defined('ABSPATH') || exit;
  * - a comment longer than the gateway assesses (3000 characters) was assessed on its
  *   beginning only, so no verdict publishes it: `bezpieczne` gets the failure mode and
  *   `ocenzurowane` is held;
- * - the masked text it publishes is escaped as text, replaces the original only when the
- *   comment still reads exactly as what was sent, and counts only once WordPress has
- *   stored exactly it — otherwise the comment is held, never published with its original;
+ * - the masked text it publishes is escaped as text and replaces the original only when
+ *   it fits what was sent ({@see Text::maskFits}: the same length, only characters turned
+ *   into `█`), the comment is plain text and still reads exactly as what was sent, and
+ *   WordPress itself would publish the comment; it counts only once WordPress has stored
+ *   exactly it. Otherwise the comment is held, never published with its original, and the
+ *   masked text waits for the moderator in {@see Meta::MASKED};
  * - the moderator's "awaiting moderation" e-mail, held back while a comment waited, goes
  *   out from WP-Cron when the outcome holds it.
  */
@@ -117,9 +120,8 @@ final class Outcome
                 $this->publish($id);
                 break;
             case self::PUBLISH_MASKED:
-                if ($masked !== null && $this->replaceWithMasked($id, $masked)) {
-                    $this->publish($id);
-                } else {
+                if (!$this->publishMasked($id, $masked)) {
+                    $this->keepMask($id, $masked);
                     $this->hold($id);
                 }
                 break;
@@ -134,6 +136,7 @@ final class Outcome
                 $this->failureMode($id);
                 break;
             default:
+                $this->keepMask($id, $masked);
                 $this->hold($id);
         }
     }
@@ -263,9 +266,10 @@ final class Outcome
             || $action === self::PUBLISH || $action === self::FAILURE_MODE) {
             return;
         }
-        if ($action === self::PUBLISH_MASKED && $masked !== null && $this->replaceWithMasked($id, $masked)) {
+        if ($action === self::PUBLISH_MASKED && $this->replacesWithMask($id, $masked)) {
             return;
         }
+        $this->keepMask($id, $masked);
         if ($this->wp->setStatus($id, 'hold')) {
             $this->scheduleNotification($id);
         }
@@ -322,6 +326,52 @@ final class Outcome
     }
 
     /**
+     * Publishes a held comment in its masked form ({@see replacesWithMask}).
+     *
+     * @param int         $id     The comment.
+     * @param string|null $masked The gateway's `ocenzurowany`.
+     * @return bool Whether the masked text replaced the content; when not, the caller holds
+     *     the comment.
+     */
+    private function publishMasked(int $id, ?string $masked): bool
+    {
+        if (!$this->replacesWithMask($id, $masked)) {
+            return false;
+        }
+        $this->publish($id);
+        return true;
+    }
+
+    /**
+     * Puts the masked text in place of the content, when WordPress itself would publish the
+     * comment: a comment the site's own rules hold keeps its content, and the masked text
+     * waits in the meta for the moderator.
+     *
+     * @param int         $id     The comment.
+     * @param string|null $masked The gateway's `ocenzurowany`.
+     * @return bool Whether the masked text is now the comment's content.
+     */
+    private function replacesWithMask(int $id, ?string $masked): bool
+    {
+        return $masked !== null && $this->wp->meta($id, Meta::WP_APPROVED) === '1'
+            && $this->replaceWithMasked($id, $masked);
+    }
+
+    /**
+     * Keeps the gateway's masked text of a comment the plugin holds, for the moderator.
+     *
+     * @param int         $id     The comment.
+     * @param string|null $masked The gateway's `ocenzurowany`, or null when there is none.
+     * @return void
+     */
+    private function keepMask(int $id, ?string $masked): void
+    {
+        if ($masked !== null && $masked !== '') {
+            $this->wp->setMeta($id, Meta::MASKED, $masked);
+        }
+    }
+
+    /**
      * Leaves a comment held for manual moderation, and tells the moderator.
      *
      * @param int $id The comment.
@@ -360,12 +410,15 @@ final class Outcome
      * Puts the masked text in place of the content, keeping the original in comment meta.
      *
      * Only when the comment still reads exactly as the text that was sent: a moderator's
-     * edit, or a text longer than what was assessed, is never replaced. And only when
-     * WordPress then stores exactly the masked text: it may refuse the update (wpdb refuses
-     * a value longer than the column, and escaping can make a text six times longer) or a
-     * filter may change it on the way in. On a failure the original is put back when it
-     * was changed, `_minos_original` is removed once the content is the original again,
-     * and the failure is recorded (its code only); the caller holds the comment.
+     * edit, or a text longer than what was assessed, is never replaced. Only when that text
+     * is the whole content, as plain text ({@see Text::isPlain}): replacing markup with
+     * escaped text would drop links and formatting and show attribute text, which is more
+     * than the masked characters. Only when the masked text fits the sent one
+     * ({@see Text::maskFits}). And only when WordPress then stores exactly the masked text:
+     * it may refuse the update (wpdb refuses a value longer than the column) or a filter may
+     * change it on the way in. On a failure to store, the original is put back when it was
+     * changed, `_minos_original` is removed once the content is the original again, and the
+     * failure is recorded (its code only); the caller holds the comment.
      *
      * @param int    $id     The comment.
      * @param string $masked The gateway's `ocenzurowany`.
@@ -380,7 +433,8 @@ final class Outcome
         $original = (string)$comment->comment_content;
         $plain = Text::plain($original);
         if (Text::isCut($plain) || (int)$this->wp->meta($id, Meta::SENT_CHARS) !== mb_strlen($plain, 'UTF-8')
-            || !hash_equals($this->wp->meta($id, Meta::SENT_HASH), hash('sha256', $plain))) {
+            || !hash_equals($this->wp->meta($id, Meta::SENT_HASH), hash('sha256', $plain))
+            || !Text::isPlain($original) || !Text::maskFits($plain, $masked)) {
             return false;
         }
         $html = Text::asHtml($masked);

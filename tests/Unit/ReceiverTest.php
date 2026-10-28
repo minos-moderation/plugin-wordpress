@@ -10,6 +10,7 @@ use Minos\WordPress\Log;
 use Minos\WordPress\Meta;
 use Minos\WordPress\Outcome;
 use Minos\WordPress\Settings;
+use Minos\WordPress\Text;
 use WpStub;
 
 /**
@@ -139,35 +140,136 @@ final class ReceiverTest extends PluginTestCase
         self::assertSame('bezpieczne', $this->field($id, Meta::STATUS));
     }
 
-    public function testACensoredCommentIsPublishedMaskedWithTheOriginalKept(): void
+    public function testACensoredPlainCommentIsPublishedMaskedWithTheOriginalKept(): void
+    {
+        $this->configure(['censored_mode' => Settings::CENSORED_PUBLISH]);
+        $original = 'no to jest głupi pomysł';
+        $id = $this->post($original);
+        $masked = 'no to jest █████ pomysł';
+
+        $this->deliver(self::verdict($id, 'ocenzurowane', ['kategorie' => ['wulgaryzmy'], 'ocenzurowany' => $masked]));
+
+        self::assertSame('1', $this->field($id, 'comment_approved'));
+        self::assertSame($masked, $this->field($id, 'comment_content'));
+        self::assertSame($original, $this->field($id, Meta::ORIGINAL));
+        self::assertNull($this->field($id, Meta::MASKED), 'a published mask needs no copy');
+        self::assertSame('ocenzurowane', $this->field($id, Meta::STATUS));
+        self::assertSame('wulgaryzmy', $this->field($id, Meta::CATEGORIES));
+    }
+
+    public function testACensoredCommentWithMarkupIsHeldWithTheMaskInTheColumn(): void
     {
         $this->configure(['censored_mode' => Settings::CENSORED_PUBLISH]);
         $original = '<p>no to jest <em>głupi</em> pomysł</p>';
         $id = $this->post($original);
+        $masked = 'no to jest █████ pomysł';
+        self::assertTrue(Text::maskFits(Text::plain($original), $masked), 'the mask itself fits: the markup decides');
 
-        $this->deliver(self::verdict($id, 'ocenzurowane', ['kategorie' => ['wulgaryzmy'],
-            'ocenzurowany' => 'no to jest █████ pomysł']));
+        $this->deliver(self::verdict($id, 'ocenzurowane', ['kategorie' => ['wulgaryzmy'], 'ocenzurowany' => $masked]));
 
-        self::assertSame('1', $this->field($id, 'comment_approved'));
-        self::assertSame('no to jest █████ pomysł', $this->field($id, 'comment_content'));
-        self::assertSame($original, $this->field($id, Meta::ORIGINAL));
+        self::assertSame('0', $this->field($id, 'comment_approved'), 'escaped text in place of markup changes more than the mask');
+        self::assertSame($original, $this->field($id, 'comment_content'));
+        self::assertNull($this->field($id, Meta::ORIGINAL));
+        self::assertSame($masked, $this->field($id, Meta::MASKED));
         self::assertSame('ocenzurowane', $this->field($id, Meta::STATUS));
-        self::assertSame('wulgaryzmy', $this->field($id, Meta::CATEGORIES));
+        self::assertStringContainsString($masked, $this->column($id), 'the moderator sees the masked text');
+        self::assertCount(1, self::events(Outcome::HOOK_NOTIFY), 'and is told');
     }
 
     public function testTheMaskedTextIsPublishedAsTextNeverAsMarkup(): void
     {
         $this->configure();
         $id = $this->post('uwaga &lt;script&gt; i ukośnik \\ oraz brzydkie słowo');
+        $masked = 'uwaga <script> i ukośnik \\ oraz ████████ słowo';
 
-        $this->deliver(self::verdict($id, 'ocenzurowane',
-            ['ocenzurowany' => 'uwaga <script> i ukośnik \\ oraz ███████ słowo']));
+        $this->deliver(self::verdict($id, 'ocenzurowane', ['ocenzurowany' => $masked]));
 
         $content = (string)$this->field($id, 'comment_content');
+        self::assertSame('1', $this->field($id, 'comment_approved'));
         self::assertStringNotContainsString('<', $content);
-        self::assertSame('uwaga <script> i ukośnik \\ oraz ███████ słowo',
-            html_entity_decode($content, ENT_QUOTES | ENT_HTML5, 'UTF-8'), 'the backslash must survive WordPress\'s unslashing');
+        self::assertSame($masked, html_entity_decode($content, ENT_QUOTES | ENT_HTML5, 'UTF-8'),
+            'the backslash must survive WordPress\'s unslashing');
         self::assertSame('uwaga &lt;script&gt; i ukośnik \\ oraz brzydkie słowo', $this->field($id, Meta::ORIGINAL));
+    }
+
+    /**
+     * Masked texts that are not the sent text with some characters turned into `█`.
+     *
+     * @return array<string,array{0:string}>
+     */
+    public static function masksThatDoNotFit(): array
+    {
+        // The sent text is 'Tekst z brzydkim słowem testowym.' ("brzydkim": 8 characters).
+        return [
+            'one character short'  => ['Tekst z ███████ słowem testowym.'],
+            'one character long'   => ['Tekst z █████████ słowem testowym.'],
+            'a foreign character'  => ['Tekst z ████████ słowem testowym!'],
+            'a link in its place'  => ['Tekst z https://a.ex słowem testowym.'],
+            'another text'         => ['Zupełnie inny tekst, dłuższy, z linkiem https://obcy.example ███'],
+        ];
+    }
+
+    /**
+     * @dataProvider masksThatDoNotFit
+     */
+    public function testAMaskThatDoesNotFitTheSentTextIsHeldWithTheMaskKept(string $masked): void
+    {
+        $this->configure(['censored_mode' => Settings::CENSORED_PUBLISH]);
+        $original = 'Tekst z brzydkim słowem testowym.';
+        $id = $this->post($original);
+        self::assertFalse(Text::maskFits($this->sentBody()['elementy'][0]['tekst'], $masked));
+
+        self::assertSame(200, $this->deliver(self::verdict($id, 'ocenzurowane', ['ocenzurowany' => $masked])));
+
+        self::assertSame('0', $this->field($id, 'comment_approved'));
+        self::assertSame($original, $this->field($id, 'comment_content'));
+        self::assertNull($this->field($id, Meta::ORIGINAL));
+        self::assertSame($masked, $this->field($id, Meta::MASKED));
+        self::assertNotContains([$id, 'approve'], WpStub::$statusChanges);
+    }
+
+    public function testAFittingMaskOfEveryLetterIsPublished(): void
+    {
+        $this->configure(['censored_mode' => Settings::CENSORED_PUBLISH]);
+        $id = $this->post('Tekst z brzydkim słowem testowym.');
+
+        $this->deliver(self::verdict($id, 'ocenzurowane', ['ocenzurowany' => 'Tekst z ████████ słowem testowym.']));
+
+        self::assertSame('1', $this->field($id, 'comment_approved'));
+        $content = (string)$this->field($id, 'comment_content');
+        $sent = $this->sentBody()['elementy'][0]['tekst'];
+        self::assertSame(mb_strlen($sent, 'UTF-8'), mb_strlen($content, 'UTF-8'));
+        self::assertTrue(Text::maskFits($sent, $content));
+    }
+
+    public function testAMaskForACommentWordPressItselfHoldsLeavesItsContent(): void
+    {
+        $this->configure(['censored_mode' => Settings::CENSORED_PUBLISH]);
+        $original = 'Tekst z brzydkim słowem testowym.';
+        $id = $this->post($original, 0);
+        $masked = 'Tekst z ████████ słowem testowym.';
+
+        $this->deliver(self::verdict($id, 'ocenzurowane', ['ocenzurowany' => $masked]));
+
+        self::assertSame('0', $this->field($id, 'comment_approved'));
+        self::assertSame($original, $this->field($id, 'comment_content'), 'the content is the moderator\'s to change');
+        self::assertNull($this->field($id, Meta::ORIGINAL));
+        self::assertSame($masked, $this->field($id, Meta::MASKED));
+    }
+
+    public function testAHeldCensoredCommentKeepsItsMaskForTheModerator(): void
+    {
+        $this->configure(['censored_mode' => Settings::HOLD]);
+        $original = 'Tekst z brzydkim słowem testowym.';
+        $id = $this->post($original);
+        $masked = 'Tekst z ████████ słowem testowym.';
+
+        $this->deliver(self::verdict($id, 'ocenzurowane', ['ocenzurowany' => $masked]));
+
+        self::assertSame('0', $this->field($id, 'comment_approved'));
+        self::assertSame($original, $this->field($id, 'comment_content'));
+        self::assertSame($masked, $this->field($id, Meta::MASKED));
+        self::assertStringContainsString($masked, $this->column($id));
     }
 
     public function testACensoredCutCommentIsHeldWithItsOriginal(): void
@@ -182,6 +284,7 @@ final class ReceiverTest extends PluginTestCase
         self::assertSame('0', $this->field($id, 'comment_approved'), 'the unassessed rest must not go public');
         self::assertSame($original, $this->field($id, 'comment_content'));
         self::assertNull($this->field($id, Meta::ORIGINAL));
+        self::assertSame(str_repeat('a', 2995) . ' ████', $this->field($id, Meta::MASKED));
         self::assertSame('ocenzurowane', $this->field($id, Meta::STATUS));
     }
 
@@ -236,22 +339,18 @@ final class ReceiverTest extends PluginTestCase
         self::assertNotContains([$id, 'approve'], WpStub::$statusChanges);
     }
 
-    public function testAMaskedTextWordPressRefusesToStoreKeepsTheCommentHeld(): void
+    public function testAMaskTooLongToStoreIsNeverWritten(): void
     {
         $this->configure(['censored_mode' => Settings::CENSORED_PUBLISH]);
-        $original = 'krótki <b>brzydki</b> komentarz';
+        $original = 'krótki brzydki komentarz';
         $id = $this->post($original);
 
-        // A masked text that escapes to more than 65,535 bytes: wpdb refuses it.
+        // Escaped, it would be more than wpdb stores; it does not fit the sent text either.
         $this->deliver(self::verdict($id, 'ocenzurowane', ['ocenzurowany' => str_repeat("'", 11000)]));
 
         self::assertSame('0', $this->field($id, 'comment_approved'), 'never published with the original');
         self::assertSame($original, $this->field($id, 'comment_content'));
         self::assertNull($this->field($id, Meta::ORIGINAL), 'nothing claims a masked version');
-        self::assertSame(Meta::ERROR_MASKED_WRITE, $this->field($id, Meta::ERROR));
-        $entry = $this->plugin->log->entries()[0];
-        self::assertSame([null, Meta::ERROR_MASKED_WRITE, $id], [$entry['http'], $entry['code'], $entry['comment']]);
-        self::assertStringNotContainsString('brzydki', (string)json_encode(WpStub::$options[Log::OPTION]));
         self::assertCount(1, self::events(Outcome::HOOK_NOTIFY), 'the moderator is told');
     }
 
@@ -269,6 +368,11 @@ final class ReceiverTest extends PluginTestCase
         self::assertSame('pierwotna brzydka treść', $this->field($id, 'comment_content'));
         self::assertNull($this->field($id, Meta::ORIGINAL));
         self::assertSame(Meta::ERROR_MASKED_WRITE, $this->field($id, Meta::ERROR));
+        self::assertSame('pierwotna ███████ treść', $this->field($id, Meta::MASKED));
+        $entry = $this->plugin->log->entries()[0];
+        self::assertSame([null, Meta::ERROR_MASKED_WRITE, $id], [$entry['http'], $entry['code'], $entry['comment']]);
+        self::assertStringNotContainsString('brzydka', (string)json_encode(WpStub::$options[Log::OPTION]));
+        self::assertCount(1, self::events(Outcome::HOOK_NOTIFY), 'the moderator is told');
     }
 
     public function testAMaskedTextStoredDifferentlyIsNotPublishedAndTheOriginalComesBack(): void
@@ -319,11 +423,12 @@ final class ReceiverTest extends PluginTestCase
         $this->configure(['censored_mode' => Settings::HOLD]);
         $id = $this->post('brzydki komentarz');
 
-        $this->deliver(self::verdict($id, 'ocenzurowane', ['ocenzurowany' => '████████ komentarz']));
+        $this->deliver(self::verdict($id, 'ocenzurowane', ['ocenzurowany' => '███████ komentarz']));
 
         self::assertSame('0', $this->field($id, 'comment_approved'));
         self::assertSame('brzydki komentarz', $this->field($id, 'comment_content'));
         self::assertNull($this->field($id, Meta::ORIGINAL));
+        self::assertSame('███████ komentarz', $this->field($id, Meta::MASKED));
     }
 
     public function testAMaskedTextForAnEditedCommentIsNotPublished(): void
@@ -471,6 +576,20 @@ final class ReceiverTest extends PluginTestCase
         });
         self::assertFalse($wp->replaceContent($id, 'Odrzucona treść.'));
         self::assertSame('Nowa treść.', $this->field($id, 'comment_content'));
+    }
+
+    /**
+     * What the "Minos" column shows for a comment.
+     *
+     * @param int $id The comment.
+     * @return string The column's HTML.
+     */
+    private function column(int $id): string
+    {
+        ob_start();
+        (new CommentsScreen($this->plugin->wp, $this->plugin->settings, $this->plugin->log))
+            ->renderColumn(CommentsScreen::COLUMN, $id);
+        return (string)ob_get_clean();
     }
 
     public function testSignatureHeaderNameIsTheContracts(): void

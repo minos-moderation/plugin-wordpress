@@ -233,7 +233,7 @@ final class SettingsPage
                     Settings::CENSORED_PUBLISH => __('opublikuj wersję z zamaskowanymi fragmentami (█)', 'minos-moderation'),
                     Settings::HOLD             => __('zostaw do ręcznej moderacji', 'minos-moderation'),
                 ]);
-                self::help(__('Oryginalna treść zostaje zachowana w danych komentarza. Komentarz zostaje do ręcznej moderacji, gdy brama nie odesłała wersji zamaskowanej, gdy nie udało się jej zapisać albo gdy komentarz jest dłuższy niż 3000 znaków (oceniono tylko jego początek).', 'minos-moderation'));
+                self::help(__('Oryginalna treść zostaje zachowana w danych komentarza. Komentarz zostaje do ręcznej moderacji, a wersję zamaskowaną widać w kolumnie „Minos”, gdy komentarz ma formatowanie lub odnośniki, gdy wersja zamaskowana nie ma dokładnie długości wysłanego tekstu albo zmienia w nim coś poza zakrytymi znakami, gdy WordPress sam wstrzymałby komentarz, gdy nie udało się jej zapisać albo gdy komentarz jest dłuższy niż 3000 znaków (oceniono tylko jego początek). Komentarz zostaje do moderacji także wtedy, gdy brama nie odesłała wersji zamaskowanej.', 'minos-moderation'));
                 break;
             case 'blocked_mode':
                 $this->radios($input, $values['blocked_mode'], [

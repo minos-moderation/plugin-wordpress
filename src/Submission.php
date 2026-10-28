@@ -258,11 +258,22 @@ final class Submission
      */
     public function pastDeadline(int $id): bool
     {
+        return $this->wp->now() >= $this->deadline($id);
+    }
+
+    /**
+     * When a pending comment's receive timeout ends ({@see pastDeadline}).
+     *
+     * @param int $id The comment.
+     * @return int Unix seconds.
+     */
+    private function deadline(int $id): int
+    {
         $since = $this->wp->meta($id, Meta::SUBMITTED_AT);
         if ($since === '') {
             $since = $this->wp->meta($id, Meta::HELD_AT);
         }
-        return $this->wp->now() >= (int)$since + $this->settings->timeoutS();
+        return (int)$since + $this->settings->timeoutS();
     }
 
     /**
@@ -395,14 +406,18 @@ final class Submission
      *
      * - `202`: accepted; the verdict will come to the webhook.
      * - `429`, `5xx` or no answer: kept pending, retried after `ponow_za_s` or a doubling
-     *   backoff.
+     *   backoff; but when the gateway's `ponow_za_s`, as given, ends at or after the
+     *   comment's receive timeout, no verdict can come in time and the failure mode applies
+     *   at once (shared rule D9.3(a)). A daily limit or an overload is also kept for the
+     *   administrator's notice ({@see Log::pause}).
      * - anything else: a configuration error (the key, the webhook, the URL); retrying will
      *   not help, so the failure mode applies and the administrator is told.
      *
      * @param int         $id     The comment.
      * @param int|null    $status The HTTP status, or null when no answer came.
      * @param string      $body   The answer's body.
-     * @return string {@see ACCEPTED}, {@see RETRY} or {@see REFUSED}.
+     * @return string {@see ACCEPTED}, {@see RETRY} (the gateway asked to wait, whether the
+     *     comment waits or its wait could not end in time) or {@see REFUSED}.
      */
     private function handleAnswer(int $id, ?int $status, string $body): string
     {
@@ -417,6 +432,16 @@ final class Submission
         $error = self::error($body);
         $this->log->record($id, $status, $error['kod']);
         if ($status === null || $status === 429 || $status >= 500) {
+            $asked = $error['asked_s'];
+            if ($asked !== null) {
+                $this->log->pause($error['kod'], $this->wp->now() + $asked);
+                if ($this->wp->now() + $asked >= $this->deadline($id)) {
+                    // The gateway refuses until after this comment's time-out: waiting
+                    // for it changes nothing but the 20 minutes.
+                    $this->outcome->timedOut($id, $error['kod'] ?? 'http_' . (int)$status);
+                    return self::RETRY;
+                }
+            }
             $attempts = (int)$this->wp->meta($id, Meta::ATTEMPTS) + 1;
             $pause = $error['ponow_za_s'] ?? min(self::MAX_BACKOFF_S, self::FIRST_BACKOFF_S * 2 ** min(20, $attempts - 1));
             $at = $this->wp->now() + $pause;
@@ -434,7 +459,9 @@ final class Submission
      * The code and the retry pause of a refusal, `{"blad": {"kod", "ponow_za_s"?}}`.
      *
      * @param string $body The answer's body.
-     * @return array{kod:string|null,ponow_za_s:int|null} What could be read.
+     * @return array{kod:string|null,ponow_za_s:int|null,asked_s:int|null} What
+     *     could be read: the pause the plugin waits (capped at a day) and the one the
+     *     gateway gave.
      */
     private static function error(string $body): array
     {
@@ -442,9 +469,11 @@ final class Submission
         $error = is_array($decoded) && is_array($decoded['blad'] ?? null) ? $decoded['blad'] : [];
         $code = is_string($error['kod'] ?? null) ? Log::safeCode($error['kod']) : null;
         $retry = $error['ponow_za_s'] ?? null;
+        $asked = is_int($retry) && $retry > 0 ? $retry : null;
         return [
             'kod'        => $code,
-            'ponow_za_s' => is_int($retry) && $retry > 0 ? min($retry, 86400) : null,
+            'ponow_za_s' => $asked === null ? null : min($asked, 86400),
+            'asked_s'    => $asked,
         ];
     }
 }

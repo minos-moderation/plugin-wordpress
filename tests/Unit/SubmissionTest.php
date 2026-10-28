@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Minos\WordPress\Tests\Unit;
 
+use Minos\WordPress\Admin\CommentsScreen;
+use Minos\WordPress\Admin\SettingsPage;
 use Minos\WordPress\Log;
 use Minos\WordPress\Meta;
 use Minos\WordPress\Settings;
@@ -246,6 +248,81 @@ final class SubmissionTest extends PluginTestCase
         self::assertNull($this->plugin->log->lastConfigError(), 'a full queue is not a configuration error');
     }
 
+    public function testADailyLimitTellsTheAdministratorUntilWhenAndAppliesTheFailureModeAtOnce(): void
+    {
+        foreach ([Settings::FAIL_CLOSED => '0', Settings::FAIL_OPEN => '1'] as $mode => $approved) {
+            $this->setUp();
+            $this->configure(['failure_mode' => $mode]);
+            WpStub::answer(429, ['blad' => ['kod' => 'limit_dobowy_klucza',
+                'komunikat' => self::KEY . ' Poufny komentarz', 'ponow_za_s' => 36000]]);
+
+            $id = $this->post('Poufny komentarz po wyczerpaniu limitu.');
+
+            // The gateway refuses for ten hours, the timeout is twenty minutes: no waiting.
+            self::assertSame(Meta::UNASSESSED, $this->field($id, Meta::STATUS), $mode);
+            self::assertSame($approved, $this->field($id, 'comment_approved'), $mode);
+            self::assertSame('limit_dobowy_klucza', $this->field($id, Meta::ERROR));
+            self::assertSame([], self::events(Submission::HOOK_RETRY), 'not retried after 19 minutes either');
+
+            $hour = wp_date('H:i', $this->now + 36000);
+            foreach (['notices' => $this->adminNotices(), 'settings page' => $this->settingsPage()] as $where => $html) {
+                self::assertStringContainsString('dzienny limit', $html, $where);
+                self::assertStringContainsString($hour, $html, $where);
+                foreach ([self::KEY, substr(self::KEY, 0, 12), 'Poufny'] as $secret) {
+                    self::assertStringNotContainsString($secret, $html, $where);
+                }
+            }
+            self::assertNull($this->plugin->log->lastConfigError(), 'not a configuration error');
+
+            // The first accepted comment ends it.
+            $this->post('Komentarz po odnowieniu limitu.');
+            self::assertStringNotContainsString('dzienny limit', $this->adminNotices());
+            self::assertStringNotContainsString('dzienny limit', $this->settingsPage());
+        }
+    }
+
+    public function testAnOverloadShowsItsOwnShorterHourAndTheCommentWaits(): void
+    {
+        $this->configure();
+        WpStub::answer(429, ['blad' => ['kod' => 'limit_globalny_b2b', 'ponow_za_s' => 600]]);
+
+        $id = $this->post('Komentarz w czasie przeciążenia bramy.');
+
+        self::assertTrue($this->pending($id), 'ten minutes end before the timeout: retried');
+        self::assertSame((string)($this->now + 600), $this->field($id, Meta::RETRY_AT));
+        $html = $this->adminNotices();
+        self::assertStringContainsString('przeciążona', $html);
+        self::assertStringContainsString(wp_date('H:i', $this->now + 600), $html);
+
+        $this->now += 601;
+        self::assertStringNotContainsString('przeciążona', $this->adminNotices(), 'gone once the moment passed');
+    }
+
+    public function testOtherRefusalsShowNoPause(): void
+    {
+        $this->configure();
+        WpStub::answer(429, ['blad' => ['kod' => 'limit_minutowy_klucza', 'ponow_za_s' => 30]]);
+        WpStub::answer(503, ['blad' => ['kod' => 'kolejka_niedostepna']]);
+        $this->post('Limit minutowy.');
+        $this->post('Kolejka niedostępna.');
+
+        self::assertNull($this->plugin->log->pausedUntil());
+    }
+
+    public function testTheGatewaysPauseIsComparedAsGivenNotAsTheRetryIsCapped(): void
+    {
+        $this->configure(['timeout_min' => Settings::MAX_TIMEOUT_MIN]);
+        WpStub::answer(429, ['blad' => ['kod' => 'limit_dobowy_klucza', 'ponow_za_s' => 90000]]);
+        $late = $this->post('Pauza dłuższa niż doba i niż czas oczekiwania.');
+        self::assertSame($this->now + 90000, $this->plugin->log->pausedUntil()['until'], 'the hour the gateway gave');
+        WpStub::answer(429, ['blad' => ['kod' => 'limit_dobowy_klucza', 'ponow_za_s' => 3600]]);
+        $soon = $this->post('Pauza godzinna przy dobowym czasie oczekiwania.');
+
+        self::assertSame(Meta::UNASSESSED, $this->field($late, Meta::STATUS));
+        self::assertTrue($this->pending($soon), 'an hour ends before a day: it waits');
+        self::assertSame((string)($this->now + 3600), $this->field($soon, Meta::RETRY_AT));
+    }
+
     public function testWithoutAPauseTheBackoffDoublesFromAMinute(): void
     {
         $this->configure();
@@ -380,6 +457,30 @@ final class SubmissionTest extends PluginTestCase
         self::assertSame([], WpStub::$requests);
         self::assertSame(Meta::UNASSESSED, $this->field($id, Meta::STATUS));
         self::assertSame('0', $this->field($id, 'comment_approved'));
+    }
+
+    /**
+     * @return string The admin notices an administrator sees on any screen.
+     */
+    private function adminNotices(): string
+    {
+        WpStub::$currentUser = 1;
+        WpStub::$userCaps[1] = ['manage_options'];
+        ob_start();
+        (new CommentsScreen($this->plugin->wp, $this->plugin->settings, $this->plugin->log))->renderNotices();
+        return (string)ob_get_clean();
+    }
+
+    /**
+     * @return string Settings → Minos, as an administrator sees it.
+     */
+    private function settingsPage(): string
+    {
+        WpStub::$currentUser = 1;
+        WpStub::$userCaps[1] = ['manage_options'];
+        ob_start();
+        (new SettingsPage($this->plugin->settings, $this->plugin->log, $this->plugin->receiver))->render();
+        return (string)ob_get_clean();
     }
 
     public function testTheModeratorsEmailWaitsForTheVerdict(): void

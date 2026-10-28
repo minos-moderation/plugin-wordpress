@@ -77,14 +77,16 @@ final class SweeperTest extends PluginTestCase
     public function testACommentNeverAcceptedTimesOutFromWhenItWasHeld(): void
     {
         $this->configure(['timeout_min' => 20]);
-        WpStub::answer(429, ['blad' => ['kod' => 'limit_dobowy_klucza', 'ponow_za_s' => 3600]]);
-        $id = $this->post('Dzienny limit wyczerpany.');
+        WpStub::answer(429, ['blad' => ['kod' => 'limit_minutowy_klucza', 'ponow_za_s' => 19 * 60]]);
+        $id = $this->post('Limit minutowy wyczerpany.');
+        self::assertTrue($this->pending($id), 'the pause ends before the timeout: it waits');
 
         $this->now += 20 * 60;
         do_action(Sweeper::HOOK);
         do_action(Submission::HOOK_RETRY, $id);
 
         self::assertSame(Meta::UNASSESSED, $this->field($id, Meta::STATUS));
+        self::assertSame('1', $this->field($id, Meta::TIMED_OUT));
         self::assertCount(1, WpStub::$requests, 'no retry after the timeout');
     }
 

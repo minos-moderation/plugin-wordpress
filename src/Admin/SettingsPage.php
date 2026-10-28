@@ -272,6 +272,10 @@ final class SettingsPage
             $state = __('Moderacja jest wyłączona — komentarze nie są wysyłane do oceny.', 'minos-moderation');
         }
         echo '<p><strong>' . esc_html($state) . '</strong></p>';
+        $pause = $this->log->pausedUntil();
+        if ($pause !== null) {
+            echo '<div class="notice notice-warning inline"><p>' . esc_html(CommentsScreen::pauseMessage($pause)) . '</p></div>';
+        }
 
         echo '<h2>' . esc_html__('Adres webhooka', 'minos-moderation') . '</h2>';
         echo '<p><code>' . esc_html($url) . '</code></p>';

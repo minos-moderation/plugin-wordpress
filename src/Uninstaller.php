@@ -18,7 +18,7 @@ final class Uninstaller
     /** Every option the plugin writes. */
     public const OPTIONS = [
         Settings::OPTION, Settings::KEY_OPTION, Settings::SECRET_OPTION, Log::OPTION,
-        Log::CONFIG_ERROR_OPTION,
+        Log::CONFIG_ERROR_OPTION, Log::PAUSE_OPTION,
     ];
 
     /**

@@ -153,7 +153,16 @@ klucz). Wtedy:
 
 Gdy brama jest chwilowo przeciążona lub niedostępna (HTTP 429 lub 503, brak odpowiedzi),
 komentarz czeka, a wtyczka ponawia wysyłkę po czasie wskazanym przez bramę albo po rosnącej
-przerwie (1, 2, 4… minuty), aż do upływu czasu oczekiwania.
+przerwie (1, 2, 4… minuty), aż do upływu czasu oczekiwania. Jeśli brama zapowiada, że nie
+przyjmie komentarza aż do chwili po upływie czasu oczekiwania (np. przy wyczerpanym
+dziennym limicie zapytań klucza), komentarz od razu trafia do trybu „Gdy brak werdyktu” —
+bez 20 minut czekania.
+
+**Komunikat o limicie i przeciążeniu.** Gdy brama odmówi z powodu wyczerpanego dziennego
+limitu zapytań klucza albo przeciążenia, na każdej stronie panelu (także na liście
+komentarzy i w **Ustawienia → Minos**) pojawia się komunikat, do której godziny brama nie
+przyjmuje komentarzy i co się z nimi do tego czasu dzieje. Komunikat znika o tej godzinie
+albo po pierwszym przyjętym komentarzu; nie zawiera klucza ani treści odpowiedzi bramy.
 
 Ponowienia, limit czasu i powiadomienia e-mail działają przez WP-Cron (co 5 minut). Na
 stronach o bardzo małym ruchu albo z wyłączonym WP-Cron (`DISABLE_WP_CRON`) ustaw

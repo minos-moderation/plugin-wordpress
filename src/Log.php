@@ -14,7 +14,9 @@ defined('ABSPATH') || exit;
  * comment's id — never the comment's content, the key, the secret or an exception's
  * message. The log keeps the last
  * {@see MAX_ENTRIES}. A configuration error (a refusal that retrying will not fix) is also
- * kept on its own, for the admin notice, until the gateway accepts a comment again.
+ * kept on its own, for the admin notice, until the gateway accepts a comment again; so is
+ * the moment until which the gateway refuses the key's comments (its daily limit, or an
+ * overload), until that moment passes or a comment is accepted.
  */
 final class Log
 {
@@ -23,6 +25,23 @@ final class Log
 
     /** The option with the last configuration error (not autoloaded). */
     public const CONFIG_ERROR_OPTION = 'minos_moderation_config_error';
+
+    /**
+     * The option with the moment until which the gateway refuses the key's comments, after
+     * a daily limit or an overload (not autoloaded).
+     */
+    public const PAUSE_OPTION = 'minos_moderation_paused';
+
+    /** {@see pause} kinds: the key's daily limit, and the gateway's overload. */
+    public const PAUSE_DAILY_LIMIT = 'limit_dobowy';
+    public const PAUSE_OVERLOAD = 'przeciazenie';
+
+    /** The refusal codes behind each kind (the contract's 429 codes). */
+    private const PAUSE_CODES = [
+        'limit_dobowy_klucza' => self::PAUSE_DAILY_LIMIT,
+        'limit_globalny_b2b'  => self::PAUSE_OVERLOAD,
+        'kolejka_pelna'       => self::PAUSE_OVERLOAD,
+    ];
 
     /** How many entries the log keeps. */
     public const MAX_ENTRIES = 50;
@@ -118,15 +137,49 @@ final class Log
     }
 
     /**
-     * Forgets the configuration error: the gateway accepted a comment.
+     * Forgets the configuration error and the refusal pause: the gateway accepted a comment.
      *
      * @return void
      */
     public function clearConfigError(): void
     {
-        if ($this->wp->option(self::CONFIG_ERROR_OPTION, null) !== null) {
-            $this->wp->deleteOption(self::CONFIG_ERROR_OPTION);
+        foreach ([self::CONFIG_ERROR_OPTION, self::PAUSE_OPTION] as $option) {
+            if ($this->wp->option($option, null) !== null) {
+                $this->wp->deleteOption($option);
+            }
         }
+    }
+
+    /**
+     * Records, for the administrator, that the gateway refuses the key's comments until a
+     * moment: a daily limit or an overload. Other refusals record nothing here.
+     *
+     * @param string|null $code  The refusal's code.
+     * @param int         $until Unix seconds: now plus the gateway's `ponow_za_s`, uncapped.
+     * @return void
+     */
+    public function pause(?string $code, int $until): void
+    {
+        $kind = self::PAUSE_CODES[(string)$code] ?? null;
+        if ($kind !== null) {
+            $this->wp->saveOption(self::PAUSE_OPTION, ['kind' => $kind, 'until' => $until], false);
+        }
+    }
+
+    /**
+     * The refusal pause still running: its kind, the moment it ends and how far that is.
+     *
+     * @return array{kind:string,until:int,left_s:int}|null The pause, or null when there is
+     *     none now.
+     */
+    public function pausedUntil(): ?array
+    {
+        $pause = $this->wp->option(self::PAUSE_OPTION, null);
+        $left = is_array($pause) ? (int)($pause['until'] ?? 0) - $this->wp->now() : 0;
+        if (!is_array($pause) || !in_array($pause['kind'] ?? null, self::PAUSE_CODES, true) || $left <= 0) {
+            return null;
+        }
+        return ['kind' => (string)$pause['kind'], 'until' => (int)$pause['until'], 'left_s' => $left];
     }
 
     /**

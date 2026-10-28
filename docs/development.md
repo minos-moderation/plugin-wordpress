@@ -45,8 +45,13 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
    text over 3000 characters is marked `_minos_cut`.
 3. The answer: `202` → accepted; `429`, `5xx` or no answer → a retry after `ponow_za_s`
    or a doubling backoff from 60 s (a one-off WP-Cron event, plus the sweep as a
-   fallback); anything else → a configuration error: the failure mode, a log entry and an
-   admin notice.
+   fallback), but the failure mode at once when `ponow_za_s`, uncapped, ends at or after
+   the comment's receive timeout (shared rule D9.3(a)); anything else → a configuration
+   error: the failure mode, a log entry and an admin notice. A `429` with
+   `limit_dobowy_klucza` (or `limit_globalny_b2b`, `kolejka_pelna`: an overload) also
+   stores "the gateway refuses until T" (`Log::pause`, option `minos_moderation_paused`)
+   for an admin notice on every screen and the settings page; it ends at T or with the
+   first `202`.
 4. The webhook applies the verdict to a comment still marked `oczekuje`, or to one the
    plugin published under fail-open (`_minos_auto_published`), when the verdict is for the
    comment's current revision (`_minos_revision`) and the comment still reads as the text

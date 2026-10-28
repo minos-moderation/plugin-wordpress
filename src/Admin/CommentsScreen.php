@@ -128,7 +128,8 @@ final class CommentsScreen
     }
 
     /**
-     * `admin_notices` action: a configuration error, a switched-on plugin that cannot work,
+     * `admin_notices` action, on every admin screen: a configuration error, the gateway
+     * refusing the key's comments until a moment, a switched-on plugin that cannot work;
      * and recent support cues on the comments screen.
      *
      * @return void
@@ -141,6 +142,10 @@ final class CommentsScreen
                 self::notice('error', __('Minos: brama odrzuciła komentarz i ponawianie nie pomoże.', 'minos-moderation')
                     . ' ' . self::errorAdvice($error['http'] ?? null, $error['code'] ?? null)
                     . ' ' . __('Do czasu poprawki komentarze trafiają do trybu „gdy brak werdyktu”.', 'minos-moderation'));
+            }
+            $pause = $this->log->pausedUntil();
+            if ($pause !== null) {
+                self::notice('warning', self::pauseMessage($pause));
             }
             if ($this->settings->all()['enabled'] && !$this->settings->isActive()) {
                 self::notice('warning', __('Minos: moderacja jest włączona, ale brakuje klucza API lub sekretu webhooka, więc komentarze nie są wysyłane do oceny.', 'minos-moderation'));
@@ -182,6 +187,24 @@ final class CommentsScreen
             'zablokowane'      => __('Zablokowany', 'minos-moderation'),
             Meta::UNASSESSED   => __('Nieoceniony', 'minos-moderation'),
         ];
+    }
+
+    /**
+     * What the administrator is told while the gateway refuses the key's comments: until
+     * when, and what happens to new comments meanwhile. Never the key or anything from the
+     * gateway's answer but its kind.
+     *
+     * @param array{kind:string,until:int,left_s:int} $pause What `Log::pausedUntil` read.
+     * @return string Polish text.
+     */
+    public static function pauseMessage(array $pause): string
+    {
+        // The site's time zone; the date too when the pause outlasts a day.
+        $at = wp_date($pause['left_s'] < 86400 ? 'H:i' : 'Y-m-d H:i', $pause['until']);
+        if ($pause['kind'] === Log::PAUSE_DAILY_LIMIT) {
+            return sprintf(__('Minos: dzienny limit zapytań klucza jest wyczerpany do %s. Do tego czasu nowe komentarze trafiają do trybu „gdy brak werdyktu” (fail-closed: czekają na moderatora; fail-open: są publikowane bez oceny).', 'minos-moderation'), $at);
+        }
+        return sprintf(__('Minos: brama jest przeciążona i nie przyjmuje komentarzy do %s. Komentarze czekają na ponowną wysyłkę; te, których czas oczekiwania minie wcześniej, trafiają do trybu „gdy brak werdyktu” (fail-closed: czekają na moderatora; fail-open: są publikowane bez oceny).', 'minos-moderation'), $at);
     }
 
     /**

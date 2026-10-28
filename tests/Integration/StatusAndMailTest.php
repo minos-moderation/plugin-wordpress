@@ -98,11 +98,21 @@ final class StatusAndMailTest extends IntegrationTestCase
         self::assertSame('Druga, poprawiona wersja.', $this->sent[1]['elementy'][0]['tekst']);
 
         $this->runMockWorker();
-        $deliveries = $this->deliveries();
-        self::assertCount(2, $deliveries);
-        foreach ($deliveries as $delivery) {
-            self::assertSame(200, $this->serveDelivery($delivery));
+        $byItem = [];
+        foreach ($this->deliveries() as $delivery) {
+            $byItem[json_decode($delivery['body'], true)['id']] = $delivery;
         }
+        $items = array_keys($byItem);
+        sort($items, SORT_STRING);
+        self::assertSame(['wp:' . $id, 'wp:' . $id . '.1'], $items);
+
+        // The verdict on the first text comes first: it changes nothing.
+        self::assertSame(200, $this->serveDelivery($byItem['wp:' . $id]));
+        self::assertSame(['0', Meta::PENDING, '1', null],
+            [self::row($id)['comment_approved'], self::stored($id, Meta::STATUS), self::stored($id, Meta::REVISION),
+                self::stored($id, Meta::RETRY_AT)], 'the stale verdict is not applied and sends nothing again');
+
+        self::assertSame(200, $this->serveDelivery($byItem['wp:' . $id . '.1']));
         self::assertSame(['1', 'bezpieczne', '1'],
             [self::row($id)['comment_approved'], self::stored($id, Meta::STATUS), self::stored($id, Meta::REVISION)],
             'the verdict on the first text blocked nothing; the one on the edited text applied');

@@ -20,6 +20,13 @@ final class QueryTest extends IntegrationTestCase
     public function testTheSweepFindsWaitingCommentsByTheirKeyWhateverTheirStatus(): void
     {
         $this->startGateway();
+        // Assessed long ago: no longer waiting, whatever its other meta.
+        $settled = $this->post('Oceniony dawno temu.');
+        $this->runMockWorker();
+        foreach ($this->deliveries() as $delivery) {
+            self::assertSame(200, $this->serveDelivery($delivery));
+        }
+        self::age($settled, 21 * 60);
         $late = $this->post('Werdykt nie nadszedł na czas.');
         $recent = $this->post('Werdykt jeszcze może nadejść.');
         $spammed = $this->post('Oznaczony przez moderatora jako spam.');
@@ -35,6 +42,8 @@ final class QueryTest extends IntegrationTestCase
         self::assertSame([Meta::PENDING, '1'], [self::stored($recent, Meta::STATUS), self::stored($recent, Meta::WAITING)]);
         self::assertSame([Meta::UNASSESSED, 'spam'],
             [self::stored($spammed, Meta::STATUS), self::row($spammed)['comment_approved']], 'found in spam too, left there');
+        self::assertSame(['bezpieczne', null], [self::stored($settled, Meta::STATUS), self::stored($settled, Meta::TIMED_OUT)],
+            'the sweep looks only at comments marked as waiting');
     }
 
     public function testRetentionComparesTheSettlementMomentAsANumber(): void
@@ -76,13 +85,16 @@ final class QueryTest extends IntegrationTestCase
         update_comment_meta($inside, Meta::SUBMITTED_AT, (string)($now - 3700));
         update_comment_meta($outside, Meta::STATUS, 'bezpieczne');
         update_comment_meta($outside, Meta::DECIDED_AT, (string)($now - 8 * 86400));
+        $alsoInside = self::factory()->comment->create(['comment_post_ID' => $this->postId,
+            'comment_date_gmt' => gmdate('Y-m-d H:i:s', $now - 2 * 86400)]);
         update_comment_meta($inside, Meta::SUPPORT, '1');
+        update_comment_meta($alsoInside, Meta::SUPPORT, '1');
         update_comment_meta($outside, Meta::SUPPORT, '1');
 
         $settled = $wp->settledSince($week, 2000);
         self::assertSame([['status' => 'zablokowane', 'submitted_at' => $now - 3700, 'decided_at' => $now - 3600,
             'timed_out' => false]], $settled);
-        self::assertSame(1, $wp->supportFlagsSince($week));
+        self::assertSame(2, $wp->supportFlagsSince($week), 'the two of this week, not the older one');
     }
 
     public function testTheFirstCommentSignalCountsTheAuthorsApprovedComments(): void

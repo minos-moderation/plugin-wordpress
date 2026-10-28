@@ -36,10 +36,11 @@ final class ContentTest extends IntegrationTestCase
     public function testAMaskedTextWrittenThroughTheContentFiltersIsPublishedExactly(): void
     {
         $this->startGateway();
-        $id = $this->post('Ala\'s "kot" & pies: paskudny tekst.');
+        // A backslash too: wp_update_comment unslashes what it is given.
+        $id = $this->post('Ala\'s "kot" & pies z C:\\temp\\pliki: paskudny tekst.');
         $original = self::row($id)['comment_content'];
         $sent = $this->sent[0]['elementy'][0]['tekst'];
-        self::assertSame('Ala\'s "kot" & pies: paskudny tekst.', $sent);
+        self::assertSame('Ala\'s "kot" & pies z C:\\temp\\pliki: paskudny tekst.', $sent);
         $mask = str_replace('paskudny', '████████', $sent);
 
         self::assertSame(200, $this->serveSigned(self::verdict($id, 'ocenzurowane', ['ocenzurowany' => $mask])));

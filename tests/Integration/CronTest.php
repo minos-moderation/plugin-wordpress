@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Minos\WordPress\Tests\Integration;
 
+use Minos\WordPress\Log;
 use Minos\WordPress\Meta;
 use Minos\WordPress\Submission;
 use Minos\WordPress\Sweeper;
@@ -39,12 +40,14 @@ final class CronTest extends IntegrationTestCase
         self::assertSame([['at' => $first, 'args' => [$id]]], self::events(Submission::HOOK_RETRY),
             'WordPress kept the earlier event and refused the one at the new retry');
 
-        // The earlier event runs: the retry is not due yet, so nothing is sent.
+        // The gateway answers again (a new address ends the pause), and the earlier event
+        // runs: the retry is not due yet, so nothing is sent.
+        $this->startGateway();
+        self::assertNull(get_option(Log::PAUSE_OPTION, null), 'no pause holds it back');
         do_action(Submission::HOOK_RETRY, $id);
         self::assertCount(2, $this->sent);
 
-        // The retry falls due and the gateway answers: the sweep sends it.
-        $this->startGateway();
+        // The retry falls due: the sweep sends it.
         self::age($id, $second - time());
         do_action(Sweeper::HOOK);
 

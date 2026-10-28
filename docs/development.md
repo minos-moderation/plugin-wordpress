@@ -146,7 +146,10 @@ Decisions worth knowing before changing anything:
   text is empty (a link with a blank text, an image without `alt`), or whose own text is
   (`Text::ownText`: no text but that of `title` and `alt` attributes, as an image with its
   `alt` or a blank link with a `title`; the gateway assesses no image, and a verdict on its
-  `alt` would stand for the image), is held and gets the failure
+  `alt` would stand for the image), or holds nothing a reader sees (`Text::hasOwnText`:
+  whitespace, separators, format characters such as a zero-width space, a soft hyphen, a
+  word joiner or a byte order mark, controls, the blank fillers; when that check cannot
+  run, the comment is sent), is held and gets the failure
   mode at once, without a request, with `_minos_error` `brak_tekstu_do_oceny` (the plugin's
   own code, not the gateway's `brak_tekstu`) shown in the "Minos" column; under fail-open
   the publication is marked as one without an assessment.

@@ -165,7 +165,8 @@ Komentarz nie dostaje werdyktu, gdy brama odpowie „nieocenione”, gdy werdykt
 w czasie oczekiwania, gdy brama odrzuci komentarz z powodu błędu konfiguracji (np. zły
 klucz) albo gdy komentarz nie ma tekstu do oceny (np. sam odnośnik bez treści albo sam
 obrazek — także z opisem `alt` lub `title`, bo brama nie ocenia obrazów, a werdykt o samym
-opisie dotyczyłby czegoś, czego nie widziała; taki komentarz nie jest wysyłany, a kolumna
+opisie dotyczyłby czegoś, czego nie widziała; niewidoczne znaki, np. spacja o zerowej
+szerokości, nie są tekstem; taki komentarz nie jest wysyłany, a kolumna
 **Minos** podaje powód „brak tekstu do oceny”). Wtedy:
 
 - **fail-closed** (domyślnie) — komentarz zostaje do ręcznej moderacji;

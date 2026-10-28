@@ -53,6 +53,14 @@ final class Text
      */
     private const BLOCK = '#</?(?:blockquote|p|div|li|ul|ol|pre|h[1-6]|br)\b[^<>]*+>#i';
 
+    /**
+     * What a reader does not see on its own: whitespace and separators, format characters
+     * (`\p{Cf}`: a zero-width space, a soft hyphen, a word joiner, a byte order mark…),
+     * controls, and the blank fillers some scripts carry (the Hangul fillers, the blank
+     * Braille pattern).
+     */
+    private const INVISIBLE = '/[\s\p{Z}\p{Cf}\p{Cc}\x{115F}\x{1160}\x{3164}\x{FFA0}\x{2800}]+/u';
+
     /** A `title` or `alt` attribute inside a tag, quoted or not. */
     private const TEXT_ATTRIBUTE = '/[\s"\'](?:title|alt)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s"\'=<>`]+))/i';
 
@@ -125,6 +133,27 @@ final class Text
         $text = preg_replace('@<(script|style)[^>]*?>.*?</\\1>@si', '', $html) ?? $html;
         $text = preg_replace(self::BLOCK, "\n", $text) ?? $text;
         return self::trim(html_entity_decode(strip_tags($text), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+    }
+
+    /**
+     * Whether the comment has text of its own that a reader sees: {@see ownText} with
+     * something left once every invisible character ({@see INVISIBLE}) is removed. Without
+     * it the comment has no text to assess (shared rules D9.5, F7): a zero-width space in a
+     * blank link or beside an image is not text, and must not carry an `alt` or a `title`
+     * to the gateway. When the check cannot run (a PCRE limit) the answer is yes: the
+     * comment is sent, more text and never less. What is sent stays {@see plain}.
+     *
+     * @param string $html The stored comment content.
+     * @return bool The answer; false for content that is not valid UTF-8.
+     */
+    public static function hasOwnText(string $html): bool
+    {
+        $own = self::ownText($html);
+        if ($own === '') {
+            return false;
+        }
+        $visible = preg_replace(self::INVISIBLE, '', $own);
+        return $visible === null || $visible !== '';
     }
 
     /**

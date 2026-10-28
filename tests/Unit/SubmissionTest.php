@@ -95,6 +95,17 @@ final class SubmissionTest extends PluginTestCase
             $this->sentBody()['elementy'][0]['tekst']);
     }
 
+    public function testTextWithAnInvisibleCharacterInsideIsSentAsItIs(): void
+    {
+        $this->configure();
+        $id = $this->post('zak&#8203;azane <img src="https://obrazek.example/a.png" alt="foto" />');
+
+        self::assertTrue($this->pending($id));
+        $text = $this->sentBody()['elementy'][0]['tekst'];
+        self::assertStringContainsString("zak\u{200B}azane", $text, 'the text is not changed');
+        self::assertStringContainsString('foto', $text);
+    }
+
     public function testAnImagesAltIsSentBesideTheCommentsOwnText(): void
     {
         $this->configure();
@@ -569,7 +580,29 @@ final class SubmissionTest extends PluginTestCase
             'an image with alt, fail-open'          => [$described, Settings::FAIL_OPEN, '1'],
             'an image with alt and title'           => [$titled, Settings::FAIL_CLOSED, '0'],
             'a blank link with a title'             => [$blankLink, Settings::FAIL_CLOSED, '0'],
-        ];
+        ] + self::invisibleOnly();
+    }
+
+    /**
+     * An image with and without `alt`, and a blank link with a `title`, each beside nothing
+     * but one character a reader does not see: still no text of its own.
+     *
+     * @return array<string,array{0:string,1:string,2:string}>
+     */
+    private static function invisibleOnly(): array
+    {
+        $cases = [];
+        $invisible = ['a zero-width space' => '&#8203;', 'a soft hyphen' => '&shy;', 'a word joiner' => '&#8288;',
+            'a byte order mark' => '&#65279;', 'a Hangul filler' => '&#12644;'];
+        foreach ($invisible as $name => $character) {
+            $cases["an image with alt and {$name}"] = ['<img src="https://obrazek.example/a.png" alt="ładny kot" />'
+                . $character, Settings::FAIL_CLOSED, '0'];
+            $cases["an image without alt and {$name}"] = ['<img src="https://obrazek.example/a.png" />' . $character,
+                Settings::FAIL_OPEN, '1'];
+            $cases["a blank link with a title and {$name}"] = ['<a href="https://kasyno.example/bonus" title="kup teraz">'
+                . $character . '</a>', Settings::FAIL_CLOSED, '0'];
+        }
+        return $cases;
     }
 
     /**

@@ -530,10 +530,11 @@ final class Submission
             return null;
         }
         $content = (string)$comment->comment_content;
-        if (Text::cut(Text::plain($content)) === '' || Text::ownText($content) === '') {
+        if (Text::cut(Text::plain($content)) === '' || !Text::hasOwnText($content)) {
             // Nothing to assess (a link with a blank text, an image with or without its
-            // alternative text and nothing else): no request, no verdict, no guess - the
-            // failure mode at once (shared rules D9.5, F7), with the reason for the moderator.
+            // alternative text and nothing else, invisible characters included): no request,
+            // no verdict, no guess - the failure mode at once (shared rules D9.5, F7), with
+            // the reason for the moderator.
             $this->outcome->withoutVerdict($id, Meta::ERROR_NO_TEXT);
             return null;
         }

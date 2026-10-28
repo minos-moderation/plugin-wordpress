@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Minos\WordPress\Tests\Integration;
 
 use Minos\WordPress\Meta;
+use Minos\WordPress\Text;
 
 /**
  * The comment's content as WordPress really stores it: kses on the way in (for a visitor
@@ -69,5 +70,47 @@ final class ContentTest extends IntegrationTestCase
         self::assertSame(Meta::ERROR_MASKED_WRITE, self::stored($id, Meta::ERROR));
         self::assertSame($mask, self::stored($id, Meta::MASKED), 'kept for the moderator');
         self::assertNull(self::stored($id, Meta::ORIGINAL), 'the content is the original');
+    }
+
+    /**
+     * @return array<string,array{0:string}> Content a visitor posts: an image or a blank link,
+     *     with attribute text, beside one character a reader does not see.
+     */
+    public static function invisibleOnly(): array
+    {
+        $cases = [];
+        foreach (['&#8203;', '&shy;', '&#8288;', '&#65279;'] as $character) {
+            $cases["a blank link with a title, {$character}"] = ['<a href="https://kasyno.example/bonus" title="kup teraz">'
+                . $character . '</a>'];
+            $cases["an image with alt, {$character}"] = ['<img src="https://obrazek.example/a.png" alt="ładny kot" />' . $character];
+        }
+        return $cases;
+    }
+
+    /**
+     * Shared rules D9.5 and F7 on the real kses, which keeps these entities: a comment whose
+     * only text is attribute text and an invisible character is never sent.
+     *
+     * @dataProvider invisibleOnly
+     */
+    public function testAnInvisibleCharacterBesideAttributeTextIsNoTextToAssess(string $content): void
+    {
+        $this->startGateway();
+        // A site that lets visitors post images in comments.
+        add_filter('wp_kses_allowed_html', static function ($tags, $context) {
+            if ($context === 'pre_comment_content' && is_array($tags)) {
+                $tags['img'] = ['src' => true, 'alt' => true, 'title' => true];
+            }
+            return $tags;
+        }, 10, 2);
+
+        $id = $this->post($content);
+
+        $stored = self::row($id)['comment_content'];
+        self::assertMatchesRegularExpression('/(title|alt)="/', $stored, 'kses kept the attribute');
+        self::assertNotSame('', Text::ownText($stored), 'more than whitespace is left beside it');
+        self::assertSame([], $this->sent, 'nothing to assess: no request');
+        self::assertSame(['0', Meta::UNASSESSED, Meta::ERROR_NO_TEXT],
+            [self::row($id)['comment_approved'], self::stored($id, Meta::STATUS), self::stored($id, Meta::ERROR)]);
     }
 }

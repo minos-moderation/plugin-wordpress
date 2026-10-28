@@ -98,6 +98,19 @@ final class TextTest extends PluginTestCase
         self::assertSame('', Text::ownText("\xC3\x28"), 'not UTF-8');
     }
 
+    public function testOwnTextOfInvisibleCharactersOnlyIsNone(): void
+    {
+        foreach (["\u{200B}", '&#8203;', '&shy;', '&#8288;', '&#65279;', "\u{200C}\u{200D}", '&nbsp;&#8203;', "\u{3164}",
+            "\u{2800}", "\x01"] as $invisible) {
+            $html = '<img src="x.png" alt="foto">' . $invisible;
+            self::assertNotSame('', Text::ownText($html), 'the trimming alone keeps it: ' . bin2hex($invisible));
+            self::assertFalse(Text::hasOwnText($html), bin2hex($invisible));
+        }
+        self::assertTrue(Text::hasOwnText('zak&#8203;azane'));
+        self::assertTrue(Text::hasOwnText('&#8203;a'));
+        self::assertFalse(Text::hasOwnText("\xC3\x28"), 'not UTF-8');
+    }
+
     public function testTheTextOfTitleAndAltIsStillKeptInPlace(): void
     {
         self::assertSame(['ukryte', 'słowo', 'ok'], preg_split('/\s+/u', Text::plain('<abbr title="ukryte słowo">ok</abbr>')));

@@ -201,11 +201,11 @@ final class CommentsScreen
     }
 
     /**
-     * What the administrator is told while the gateway refuses the key's comments: until
-     * when, and what happens to new comments meanwhile. Never the key or anything from the
-     * gateway's answer but its kind.
+     * What the administrator is told while the gateway asked to wait: until when, why, and
+     * what happens to new comments meanwhile. Never the key or anything from the gateway's
+     * answer but its kind and its code.
      *
-     * @param array{kind:string,until:int,left_s:int} $pause What `Log::pausedUntil` read.
+     * @param array{kind:string,code:string|null,until:int,left_s:int} $pause What `Log::pausedUntil` read.
      * @return string Polish text.
      */
     public static function pauseMessage(array $pause): string
@@ -215,7 +215,13 @@ final class CommentsScreen
         if ($pause['kind'] === Log::PAUSE_DAILY_LIMIT) {
             return sprintf(__('Minos: dzienny limit zapytań klucza jest wyczerpany do %s. Do tego czasu nowe komentarze trafiają do trybu „gdy brak werdyktu” (fail-closed: czekają na moderatora; fail-open: są publikowane bez oceny).', 'minos-moderation'), $at);
         }
-        return sprintf(__('Minos: brama jest przeciążona i nie przyjmuje komentarzy do %s. Komentarze czekają na ponowną wysyłkę; te, których czas oczekiwania minie wcześniej, trafiają do trybu „gdy brak werdyktu” (fail-closed: czekają na moderatora; fail-open: są publikowane bez oceny).', 'minos-moderation'), $at);
+        if ($pause['kind'] === Log::PAUSE_OVERLOAD) {
+            return sprintf(__('Minos: brama jest przeciążona i nie przyjmuje komentarzy do %s. Komentarze czekają na ponowną wysyłkę; te, których czas oczekiwania minie wcześniej, trafiają do trybu „gdy brak werdyktu” (fail-closed: czekają na moderatora; fail-open: są publikowane bez oceny).', 'minos-moderation'), $at);
+        }
+        $why = $pause['code'] !== null
+            ? sprintf(__('kod %s', 'minos-moderation'), $pause['code'])
+            : __('brak odpowiedzi albo błąd bramy', 'minos-moderation');
+        return sprintf(__('Minos: brama poprosiła o przerwę w wysyłaniu komentarzy (%1$s) — wtyczka wznowi wysyłanie o %2$s. Do tego czasu nowe komentarze czekają wstrzymane; te, których czas oczekiwania minie wcześniej, trafiają do trybu „gdy brak werdyktu” (fail-closed: czekają na moderatora; fail-open: są publikowane bez oceny).', 'minos-moderation'), $why, $at);
     }
 
     /**

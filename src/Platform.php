@@ -247,6 +247,28 @@ class Platform
     }
 
     /**
+     * Comments with a retry on the way, oldest first: by the meta key alone
+     * ({@see Meta::RETRY_AT}, set from a failed or held attempt until the gateway's `202`
+     * or the comment is settled), never by a meta value. Comments that only wait for their
+     * verdict do not have it, so they never crowd the due retries out of the window.
+     *
+     * @param int $limit The most to return.
+     * @return array<int,int> Comment ids.
+     */
+    public function retryCommentIds(int $limit): array
+    {
+        $ids = get_comments([
+            'status'   => 'any',
+            'meta_key' => Meta::RETRY_AT,
+            'fields'   => 'ids',
+            'number'   => $limit,
+            'orderby'  => 'comment_ID',
+            'order'    => 'ASC',
+        ]);
+        return array_map('intval', is_array($ids) ? $ids : []);
+    }
+
+    /**
      * Comments settled before a moment ({@see Meta::DECIDED_AT}), oldest first: a query by
      * value, run hourly by {@see Retention} over the comments settled in the last 30 days and
      * those it has not cleaned yet.

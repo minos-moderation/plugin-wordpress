@@ -116,6 +116,9 @@ final class Plugin
         add_action(Retention::HOOK, [$retention, 'run']);
         // Switching moderation on again sends what was waiting, with a fresh timeout.
         add_action('update_option_' . Settings::OPTION, [$submission, 'onSettingsSaved'], 10, 2);
+        // Another key or secret ends the gateway's pause, which answered the old one.
+        add_action('update_option_' . Settings::KEY_OPTION, [$submission, 'onCredentialsSaved'], 10, 2);
+        add_action('update_option_' . Settings::SECRET_OPTION, [$submission, 'onCredentialsSaved'], 10, 2);
         add_action('comment_form', [$this->notice, 'render']);
         add_action('rest_api_init', static function () use ($receiver): void {
             register_rest_route(Receiver::REST_NAMESPACE, Receiver::ROUTE, [

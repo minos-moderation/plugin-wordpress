@@ -35,7 +35,7 @@ defined('ABSPATH') || exit;
  * decision and is not sent.
  *
  * The gateway's limits count requests, not items, and a refusal the key caused spends its
- * allowance. So an answer that asks to wait (`429`, `5xx`, no answer) pauses every
+ * allowance. So an answer that asks to wait (`429`, `408`, `5xx`, no answer) pauses every
  * submission until its `ponow_za_s`, or the backoff, ends ({@see Log::sendingPause}): a
  * comment written meanwhile is held for WP-Cron instead of being sent in its author's
  * request. The retries then go out together, up to {@see MAX_ITEMS} comments a request,
@@ -44,8 +44,9 @@ defined('ABSPATH') || exit;
 final class Submission
 {
     /**
-     * The WP-Cron action that retries a comment after a `429`, a `5xx` or no answer, or after
-     * the pause the gateway asked for; the request carries the other due comments too.
+     * The WP-Cron action that retries a comment after a `429`, a `408`, a `5xx` or no
+     * answer, or after the pause the gateway asked for; the request carries the other due
+     * comments too.
      */
     public const HOOK_RETRY = 'minos_moderation_retry';
 
@@ -60,6 +61,12 @@ final class Submission
 
     /** The longest retry pause. */
     public const MAX_BACKOFF_S = 3600;
+
+    /**
+     * The longest `ponow_za_s` taken as given: a year, longer than any receive timeout and
+     * any pause the plugin keeps, short enough that adding it to the clock stays an integer.
+     */
+    private const MAX_ASKED_S = 365 * 86400;
 
     /**
      * The most waiting comments switching the plugin on again sends again (a day of the
@@ -209,7 +216,8 @@ final class Submission
      * `update_option_{settings}` action: switching moderation on again sends what was
      * waiting when it was switched off, each as its next revision with a fresh receive
      * timeout (shared rule D9.13), from WP-Cron rather than in the administrator's request.
-     * A comment a person decided on meanwhile is left to that decision.
+     * A comment a person decided on meanwhile is left to that decision. Switching it off or
+     * on, or another gateway address, also ends the gateway's pause ({@see Log::endPause}).
      *
      * @param mixed $old The settings before.
      * @param mixed $new The settings now.
@@ -217,9 +225,12 @@ final class Submission
      */
     public function onSettingsSaved($old, $new): void
     {
-        $was = Settings::normalise(is_array($old) ? $old : [])['enabled'];
-        $is = Settings::normalise(is_array($new) ? $new : [])['enabled'];
-        if ($was || !$is) {
+        $before = Settings::normalise(is_array($old) ? $old : []);
+        $after = Settings::normalise(is_array($new) ? $new : []);
+        if ($before['enabled'] !== $after['enabled'] || $before['gateway_url'] !== $after['gateway_url']) {
+            $this->log->endPause();
+        }
+        if ($before['enabled'] || !$after['enabled']) {
             return;
         }
         foreach ($this->wp->pendingCommentIds(self::RESUME_BATCH) as $id) {
@@ -231,6 +242,22 @@ final class Submission
                 // Left waiting: the sweep gives it the failure mode once its old timeout is past.
                 $this->outcome->failed(Log::STEP_SUBMIT, $id);
             }
+        }
+    }
+
+    /**
+     * `update_option_{key}` and `update_option_{secret}` actions (WordPress fires them only
+     * on a change): another key may have other limits, so the gateway's pause, which
+     * answered the old one, ends.
+     *
+     * @param mixed $old The value before.
+     * @param mixed $new The value now.
+     * @return void
+     */
+    public function onCredentialsSaved($old, $new): void
+    {
+        if ($old !== $new) {
+            $this->log->endPause();
         }
     }
 
@@ -349,7 +376,7 @@ final class Submission
     private function dueWith(int $id): array
     {
         $ids = [$id];
-        foreach ($this->wp->pendingCommentIds(Sweeper::BATCH) as $other) {
+        foreach ($this->wp->retryCommentIds(Sweeper::BATCH) as $other) {
             if (count($ids) >= self::MAX_ITEMS) {
                 break;
             }
@@ -416,7 +443,8 @@ final class Submission
             $this->wait($id, $pause);
             return self::RETRY;
         }
-        return $this->sendBatch([$this->entry($comment)]);
+        $budget = 1;
+        return $this->sendBatch([$this->entry($comment)], $budget);
     }
 
     /**
@@ -431,7 +459,8 @@ final class Submission
      * comment id ({@see Outcome::failed}), never by its message.
      *
      * @param array<int,int> $ids         Comments whose retry is due, in the order to send.
-     * @param int            $maxRequests The most requests to send.
+     * @param int            $maxRequests The most HTTP requests to send, a request sent again
+     *     after one refused item included.
      * @return void
      */
     public function sendDue(array $ids, int $maxRequests): void
@@ -455,8 +484,11 @@ final class Submission
         $ids = array_values($ids);
         $last = count($ids) - 1;
         $batch = [];
-        $requests = 0;
+        $budget = $maxRequests;
         foreach ($ids as $index => $id) {
+            if ($budget <= 0) {
+                return;
+            }
             try {
                 $comment = $this->assessable($id);
                 if ($comment !== null) {
@@ -469,10 +501,9 @@ final class Submission
             if ($batch === [] || (count($batch) < self::MAX_ITEMS && $index < $last)) {
                 continue;
             }
-            $requests++;
-            $answer = $this->sendBatchIsolated($batch);
+            $answer = $this->sendBatchIsolated($batch, $budget);
             $batch = [];
-            if ($answer === self::RETRY || $requests >= $maxRequests) {
+            if ($answer === self::RETRY) {
                 return;
             }
         }
@@ -641,12 +672,13 @@ final class Submission
      * recorded once under the first comment's id and on each comment.
      *
      * @param array<int,array{id:int,item:array<string,mixed>}> $entries The comments and their items.
+     * @param int                                               $budget  HTTP requests left; each one sent counts.
      * @return string What {@see sendBatch} answered, or {@see REFUSED} when it failed.
      */
-    private function sendBatchIsolated(array $entries): string
+    private function sendBatchIsolated(array $entries, int &$budget): string
     {
         try {
-            return $this->sendBatch($entries);
+            return $this->sendBatch($entries, $budget);
         } catch (\Throwable $e) {
             $this->outcome->failedTogether(Log::STEP_SUBMIT, array_column($entries, 'id'));
             return self::REFUSED;
@@ -660,12 +692,15 @@ final class Submission
      * of them, and such a refusal costs the key nothing.
      *
      * @param array<int,array{id:int,item:array<string,mixed>}> $entries 1-{@see MAX_ITEMS} comments and their items.
+     * @param int                                               $budget  HTTP requests left; each one sent counts,
+     *     and the comments not sent for want of it stay due.
      * @return string {@see ACCEPTED} (the gateway took at least one), {@see RETRY} (it asked
      *     to wait, or took none) or {@see REFUSED}.
      */
-    private function sendBatch(array $entries): string
+    private function sendBatch(array $entries, int &$budget): string
     {
-        while (true) {
+        while ($budget > 0) {
+            $budget--;
             $answer = $this->wp->post(
                 $this->settings->all()['gateway_url'] . self::PATH,
                 ['Content-Type' => 'application/json', 'X-Gateway-Key' => $this->settings->apiKey()],
@@ -679,6 +714,8 @@ final class Submission
             }
             $entries = $rest;
         }
+        // Out of requests after a refused item: the others stay due for the next pass.
+        return self::REFUSED;
     }
 
     /**
@@ -687,15 +724,18 @@ final class Submission
      * - `202`: each comment whose item id is in `przyjete` is accepted (its verdict will
      *   come to the webhook); any other is retried after its own backoff (shared rule D9.6:
      *   only `202` with the item in it accepts). Any acceptance ends the refusal pause.
-     * - `429`, `5xx` or no answer: every submission waits until the gateway's `ponow_za_s`
+     * - `429`, `5xx`, `408` (a timeout on the way, as no answer) or no answer: every
+     *   submission waits until the gateway's `ponow_za_s`
      *   or, without it, a doubling backoff ends ({@see Log::pause}); each comment of the
      *   request is retried then, but when the gateway's `ponow_za_s`, as given, ends at or
      *   after the comment's receive timeout, no verdict can come in time and the failure
      *   mode applies at once (shared rule D9.3(a)).
      * - a refusal of one item (`blad.element`, for an id, a text or a length): that comment
      *   gets the failure mode; the others are returned, to be sent again.
-     * - anything else: a configuration error (the key, the webhook, the URL, the profile);
-     *   retrying will not help, so the failure mode applies and the administrator is told.
+     * - anything else: a configuration error (the key, the webhook, the URL, the profile, or
+     *   a `2xx` other than `202`: something in front of the gateway answered, and only `202`
+     *   accepts); retrying will not help, so the failure mode applies and the administrator
+     *   is told.
      *
      * @param array<int,array{id:int,item:array<string,mixed>}> $entries The comments and their items.
      * @param int|null                                          $status  The HTTP status, or null when no answer came.
@@ -711,8 +751,8 @@ final class Submission
         $error = self::error($body);
         $code = $error['kod'] ?? 'http_' . (int)$status;
         $element = $error['element'];
-        if ($status !== null && $status !== 429 && $status < 500 && $element !== null
-            && isset($entries[$element]) && in_array($code, self::ITEM_CODES, true)) {
+        $wait = $status === null || $status === 408 || $status === 429 || $status >= 500;
+        if (!$wait && $element !== null && isset($entries[$element]) && in_array($code, self::ITEM_CODES, true)) {
             // One request, one log entry: under the comment it refused.
             $this->log->record($entries[$element]['id'], $status, $error['kod']);
             $this->outcome->withoutVerdict($entries[$element]['id'], $code);
@@ -720,7 +760,7 @@ final class Submission
             return $entries === [] ? self::REFUSED : array_values($entries);
         }
         $this->log->record($entries[0]['id'], $status, $error['kod']);
-        if ($status === null || $status === 429 || $status >= 500) {
+        if ($wait) {
             $this->waitForGateway($entries, $status, $error);
             return self::RETRY;
         }
@@ -838,7 +878,8 @@ final class Submission
         $error = is_array($decoded) && is_array($decoded['blad'] ?? null) ? $decoded['blad'] : [];
         $code = is_string($error['kod'] ?? null) ? Log::safeCode($error['kod']) : null;
         $retry = $error['ponow_za_s'] ?? null;
-        $asked = is_int($retry) && $retry > 0 ? $retry : null;
+        // Clamped far beyond any timeout and any pause, so the arithmetic stays in integers.
+        $asked = is_int($retry) && $retry > 0 ? min($retry, self::MAX_ASKED_S) : null;
         $element = $error['element'] ?? null;
         return [
             'kod'        => $code,

@@ -42,7 +42,7 @@ final class PauseAndBatchTest extends PluginTestCase
         $this->runDueEvents();
 
         self::assertCount(2, WpStub::$requests, 'then one request for all three');
-        self::assertSame(self::itemIds($ids), $this->sentIds());
+        self::assertSame(self::itemIds($ids), self::sorted($this->sentIds()));
         foreach ($ids as $id) {
             self::assertSame((string)$end, $this->field($id, Meta::SUBMITTED_AT));
         }
@@ -93,7 +93,7 @@ final class PauseAndBatchTest extends PluginTestCase
         $this->now = $end;
         $this->runDueEvents();
 
-        self::assertSame(self::itemIds([$first, $next]), $this->sentIds(), 'both in one request once it ends');
+        self::assertSame(self::itemIds([$first, $next]), self::sorted($this->sentIds()), 'both in one request once it ends');
         self::assertNull($this->plugin->log->sendingPause(), 'the gateway took them: no pause');
     }
 
@@ -135,6 +135,137 @@ final class PauseAndBatchTest extends PluginTestCase
         self::assertSame(Log::PAUSE_DAILY_LIMIT, $this->plugin->log->pausedUntil()['kind'] ?? null);
     }
 
+    /**
+     * @return array<string,array{0:int}> A `ponow_za_s` far beyond any timeout.
+     */
+    public static function hugePauses(): array
+    {
+        return ['a billion seconds' => [1000000000], 'the largest integer' => [PHP_INT_MAX]];
+    }
+
+    /**
+     * @dataProvider hugePauses
+     */
+    public function testAHugePauseIsKeptForADayAtMostThenTheGatewayIsAskedAgain(int $asked): void
+    {
+        $this->configure();
+        WpStub::answer(429, ['blad' => ['kod' => 'limit_minutowy_klucza', 'ponow_za_s' => $asked]]);
+        $first = $this->post('Komentarz, po którym brama każe czekać bardzo długo.');
+
+        self::assertSame(Meta::UNASSESSED, $this->field($first, Meta::STATUS), 'judged by what the gateway said');
+        self::assertSame($this->now + Log::MAX_PAUSE_S, $this->plugin->log->sendingPause()['until'] ?? null);
+        $during = $this->post('Komentarz w czasie bardzo długiej pauzy.');
+        self::assertSame([Meta::UNASSESSED, 'limit_minutowy_klucza'],
+            [$this->field($during, Meta::STATUS), $this->field($during, Meta::ERROR)], 'its timeout ends first');
+
+        $this->now += Log::MAX_PAUSE_S;
+        $after = $this->post('Komentarz dzień później.');
+        self::assertCount(2, WpStub::$requests, 'a day later the gateway is asked again');
+        self::assertSame((string)$this->now, $this->field($after, Meta::SUBMITTED_AT));
+    }
+
+    /**
+     * @return array<string,array{0:string,1:mixed}> An option and its new value.
+     */
+    public static function changesThatEndThePause(): array
+    {
+        return [
+            'another key'             => [Settings::KEY_OPTION, 'wgb2b_inny_testowy_klucz_000000000'],
+            'another secret'          => [Settings::SECRET_OPTION, 'inny-testowy-sekret-webhooka-0123'],
+            'another gateway address' => [Settings::OPTION, ['gateway_url' => 'https://brama.example']],
+        ];
+    }
+
+    /**
+     * @dataProvider changesThatEndThePause
+     * @param mixed $value
+     */
+    public function testAChangeOfTheConnectionEndsThePause(string $option, $value): void
+    {
+        $this->configure();
+        WpStub::answer(429, ['blad' => ['kod' => 'limit_dobowy_klucza', 'ponow_za_s' => 50000]]);
+        $this->post('Komentarz po wyczerpaniu limitu dobowego.');
+        $this->now += 3600;
+        update_option(Settings::OPTION, WpStub::$options[Settings::OPTION]);
+        self::assertNotNull($this->plugin->log->sendingPause(), 'saving the same settings changes nothing');
+
+        update_option($option, is_array($value) ? $value + WpStub::$options[Settings::OPTION] : $value);
+
+        self::assertNull($this->plugin->log->sendingPause());
+        self::assertNull($this->plugin->log->pausedUntil(), 'and its notice');
+        $id = $this->post('Komentarz po zmianie połączenia.');
+        self::assertCount(2, WpStub::$requests, 'sent at once');
+        self::assertSame((string)$this->now, $this->field($id, Meta::SUBMITTED_AT));
+    }
+
+    public function testSwitchingOffAndOnEndsThePause(): void
+    {
+        $this->configure();
+        WpStub::answer(429, ['blad' => ['kod' => 'limit_dobowy_klucza', 'ponow_za_s' => 50000]]);
+        $this->post('Komentarz po wyczerpaniu limitu dobowego.');
+        $settings = WpStub::$options[Settings::OPTION];
+
+        update_option(Settings::OPTION, ['enabled' => false] + $settings);
+        self::assertNull($this->plugin->log->sendingPause());
+    }
+
+    public function testASweepCountsEveryHttpRequestARefusedItemsResendIncluded(): void
+    {
+        $ids = $this->dueRetries(Sweeper::MAX_REQUESTS * Submission::MAX_ITEMS);
+        for ($i = 0; $i < 2 * Sweeper::MAX_REQUESTS; $i++) {
+            WpStub::answer(400, ['blad' => ['kod' => 'brak_tekstu', 'element' => 0]]);
+        }
+
+        do_action(Sweeper::HOOK);
+
+        self::assertCount(1 + Sweeper::MAX_REQUESTS, WpStub::$requests, 'the sweep\'s requests, every resend counted');
+        $failed = array_filter($ids, function (int $id): bool {
+            return $this->field($id, Meta::ERROR) === 'brak_tekstu';
+        });
+        self::assertCount(Sweeper::MAX_REQUESTS, $failed, 'one refused item a request');
+        $left = array_filter($ids, function (int $id): bool {
+            return $this->plugin->submission->due($id);
+        });
+        self::assertCount(count($ids) - Sweeper::MAX_REQUESTS, $left, 'the others stay due for the next run');
+    }
+
+    public function testA408IsRetriedLikeNoAnswer(): void
+    {
+        $this->configure();
+        WpStub::answer(408);
+        $id = $this->post('Komentarz, którego żądanie przekroczyło czas.');
+
+        self::assertTrue($this->pending($id));
+        self::assertSame((string)($this->now + Submission::FIRST_BACKOFF_S), $this->field($id, Meta::RETRY_AT));
+        self::assertNotNull($this->plugin->log->sendingPause());
+        self::assertNull($this->plugin->log->lastConfigError(), 'not a configuration error');
+    }
+
+    /**
+     * @return array<string,array{0:int}> A `2xx` that is not the gateway's `202`.
+     */
+    public static function otherSuccesses(): array
+    {
+        return ['200' => [200], '201' => [201], '204' => [204]];
+    }
+
+    /**
+     * @dataProvider otherSuccesses
+     */
+    public function testOnly202AcceptsEvenWithEveryItemInPrzyjete(int $status): void
+    {
+        $this->configure();
+        $next = 'wp:' . ((WpStub::$comments === [] ? 0 : max(array_keys(WpStub::$comments))) + 1);
+        WpStub::answer($status, ['przyjete' => [$next]]);
+
+        $id = $this->post('Komentarz z odpowiedzią spoza bramy.');
+
+        self::assertSame('wp:' . $id, $next, 'the answer named this very comment');
+        self::assertNull($this->field($id, Meta::SUBMITTED_AT), 'not accepted');
+        self::assertSame([Meta::UNASSESSED, 'http_' . $status], [$this->field($id, Meta::STATUS), $this->field($id, Meta::ERROR)]);
+        self::assertSame($status, $this->plugin->log->lastConfigError()['http'] ?? null, 'the administrator is told');
+    }
+
     public function testAnEditDuringThePauseWaitsForIt(): void
     {
         $this->configure();
@@ -173,16 +304,56 @@ final class PauseAndBatchTest extends PluginTestCase
         }
     }
 
-    public function testTwentyFiveDueRetriesGoOutInTwoRequestsFromTheirOwnEvents(): void
+    /**
+     * @return array<string,array{0:bool}> Whether WP-Cron runs the events of one moment in reverse.
+     */
+    public static function eventOrders(): array
+    {
+        // Before PHP 8 `usort` is not stable: events of the same moment may run in any order.
+        return ['as scheduled' => [false], 'reversed' => [true]];
+    }
+
+    /**
+     * @dataProvider eventOrders
+     */
+    public function testTwentyFiveDueRetriesGoOutInTwoRequestsFromTheirOwnEvents(bool $reversed): void
     {
         $ids = $this->dueRetries(25);
 
-        $this->runDueEvents();
+        $this->runDueEvents($reversed);
 
         self::assertSame(3, count(WpStub::$requests), 'the refused one, then 20 + 5');
-        self::assertCount(Submission::MAX_ITEMS, $this->sentIds(1));
-        self::assertCount(5, $this->sentIds(2));
-        self::assertSame(self::itemIds($ids), array_merge($this->sentIds(1), $this->sentIds(2)));
+        self::assertSame([Submission::MAX_ITEMS, 5], [count($this->sentIds(1)), count($this->sentIds(2))]);
+        self::assertSame(self::itemIds($ids), self::sorted(array_merge($this->sentIds(1), $this->sentIds(2))),
+            'each comment exactly once');
+    }
+
+    /**
+     * @dataProvider eventOrders
+     */
+    public function testDueRetriesAreNotCrowdedOutByCommentsWaitingForTheirVerdicts(bool $reversed): void
+    {
+        $this->configure();
+        for ($i = 0; $i < Sweeper::BATCH; $i++) {
+            $this->post('Komentarz przyjęty, czeka na werdykt ' . $i . '.');
+        }
+        WpStub::networkFailure();
+        $due = [];
+        for ($i = 0; $i < 25; $i++) {
+            $due[] = $this->post('Komentarz do ponowienia ' . $i . '.');
+        }
+        $this->now += Submission::FIRST_BACKOFF_S;
+        $before = count(WpStub::$requests);
+
+        $reversed ? $this->runDueEvents(true) : do_action(Sweeper::HOOK);
+
+        $sizes = array_map(function (int $index): int {
+            return count($this->sentIds($index));
+        }, range($before, count(WpStub::$requests) - 1));
+        self::assertSame([Submission::MAX_ITEMS, 5], $sizes, 'two requests, 20 + 5, behind 200 waiting for verdicts');
+        foreach ($due as $id) {
+            self::assertSame((string)$this->now, $this->field($id, Meta::SUBMITTED_AT));
+        }
     }
 
     public function testACommentTheGatewayDidNotTakeIsRetriedAndTheOthersWait(): void
@@ -297,22 +468,39 @@ final class PauseAndBatchTest extends PluginTestCase
     }
 
     /**
-     * Runs the one-off events that are due, oldest first, as WP-Cron does, each once.
+     * Runs the one-off events that are due, oldest first, as WP-Cron does, each once. Events
+     * of the same moment run as scheduled, or in reverse: a stable sort keeps them in order
+     * on every PHP version, and a test that passes both ways depends on neither.
+     *
+     * @param bool $reversed Whether the events of one moment run last scheduled first.
      */
-    private function runDueEvents(): void
+    private function runDueEvents(bool $reversed = false): void
     {
-        $due = array_values(array_filter(WpStub::$events, function (array $event): bool {
-            return $event['recurrence'] === null && $event['at'] <= $this->now;
-        }));
+        $due = [];
+        foreach (WpStub::$events as $index => $event) {
+            if ($event['recurrence'] === null && $event['at'] <= $this->now) {
+                $due[] = [$event['at'], $reversed ? -$index : $index, $event];
+            }
+        }
         WpStub::$events = array_values(array_filter(WpStub::$events, function (array $event): bool {
             return $event['recurrence'] !== null || $event['at'] > $this->now;
         }));
         usort($due, static function (array $a, array $b): int {
-            return $a['at'] <=> $b['at'];
+            return [$a[0], $a[1]] <=> [$b[0], $b[1]];
         });
-        foreach ($due as $event) {
+        foreach ($due as [, , $event]) {
             do_action($event['hook'], ...$event['args']);
         }
+    }
+
+    /**
+     * @param array<int,string> $ids Item ids.
+     * @return array<int,string> The same, in the order of the comments' ids.
+     */
+    private static function sorted(array $ids): array
+    {
+        sort($ids, SORT_NATURAL);
+        return $ids;
     }
 
     /**

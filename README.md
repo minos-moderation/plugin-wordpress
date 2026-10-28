@@ -171,29 +171,34 @@ do oceny”). Wtedy:
 - **fail-open** — komentarz zostaje opublikowany (o ile WordPress sam by go opublikował).
 
 **Ponawianie.** Gdy brama każe poczekać — odmowa HTTP 429 (limit minutowy, dzienny lub
-„w toku” klucza, wspólny limit usługi, pełna kolejka), błąd HTTP 5xx albo brak odpowiedzi —
-wtyczka wstrzymuje **wszystkie** wysyłki do chwili wskazanej przez bramę, a bez niej na
-rosnącą przerwę (1, 2, 4… minuty, najwyżej godzina). Limity bramy liczą zapytania, nie
+„w toku” klucza, wspólny limit usługi, pełna kolejka), błąd HTTP 5xx, przekroczenie czasu
+(HTTP 408) albo brak odpowiedzi — wtyczka wstrzymuje **wszystkie** wysyłki do chwili
+wskazanej przez bramę, a bez niej na rosnącą przerwę (1, 2, 4… minuty, najwyżej godzina);
+przerwa trwa najwyżej dobę, a potem wtyczka pyta bramę znowu. Zmiana klucza API, sekretu
+webhooka, adresu bramy albo wyłączenie lub włączenie moderacji kończy przerwę od razu. Limity bramy liczą zapytania, nie
 komentarze, a każda odmowa spowodowana przez klucz zużywa jego limit, więc w czasie przerwy
 nowy komentarz nie jest wysyłany przy dodaniu: czeka wstrzymany, a po przerwie WP-Cron
 wysyła zaległe komentarze razem, do 20 w jednym zapytaniu. Komentarz, którego brama nie
 wymieni w odpowiedzi jako przyjętego, jest ponawiany osobno; komentarz, który brama odrzuci
 jako wadliwy, trafia do trybu „Gdy brak werdyktu”, a pozostałe z tego zapytania są
 wysyłane ponownie od razu. Inne odmowy (np. zły klucz, brak webhooka, niedozwolony profil)
-nie są ponawiane: to błąd konfiguracji (patrz niżej). Ponowienia trwają do upływu czasu
+i odpowiedź 2xx inna niż 202 (przyjęcie oznacza tylko 202) nie są ponawiane: to błąd
+konfiguracji (patrz niżej). Ponowienia trwają do upływu czasu
 oczekiwania. Jeśli brama zapowiada, że nie przyjmie komentarzy aż do chwili po upływie
 czasu oczekiwania (np. przy wyczerpanym dziennym limicie zapytań klucza), komentarz od
 razu trafia do trybu „Gdy brak werdyktu” — bez 20 minut czekania; dotyczy to także
 komentarzy dodanych w czasie takiej przerwy.
 
-**Komunikat o limicie i przeciążeniu.** Gdy brama odmówi z powodu wyczerpanego dziennego
-limitu zapytań klucza albo przeciążenia, na każdej stronie panelu (także na liście
-komentarzy i w **Ustawienia → Minos**) pojawia się komunikat, do której godziny brama nie
-przyjmuje komentarzy i co się z nimi do tego czasu dzieje. Komunikat znika o tej godzinie
-albo po pierwszym przyjętym komentarzu; nie zawiera klucza ani treści odpowiedzi bramy.
+**Komunikat o przerwie.** Dopóki trwa przerwa, na każdej stronie panelu (także na liście
+komentarzy i w **Ustawienia → Minos**) widać komunikat, do której godziny wtyczka nie
+wysyła komentarzy, dlaczego (wyczerpany dzienny limit zapytań klucza, przeciążenie bramy
+albo kod odpowiedzi bramy, np. `limit_minutowy_klucza`) i co się z nimi do tego czasu
+dzieje. Komunikat znika o tej godzinie, po pierwszym przyjętym komentarzu albo po zmianie
+klucza, sekretu, adresu bramy lub przełącznika moderacji; nie zawiera klucza ani treści
+odpowiedzi bramy.
 
 Ponowienia, limit czasu i powiadomienia e-mail działają przez WP-Cron (co 5 minut; jeden
-przebieg wysyła najwyżej 5 zapytań po 20 komentarzy). Na
+przebieg wysyła najwyżej 5 zapytań, do 20 komentarzy w każdym). Na
 stronach o bardzo małym ruchu albo z wyłączonym WP-Cron (`DISABLE_WP_CRON`) ustaw
 systemowe zadanie cron wywołujące `wp-cron.php` — inaczej mogą się opóźniać.
 

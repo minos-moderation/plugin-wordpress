@@ -348,19 +348,25 @@ final class SubmissionTest extends PluginTestCase
         self::assertStringNotContainsString('przeciążona', $this->adminNotices(), 'gone once the moment passed');
     }
 
-    public function testOtherRefusalsShowNoPause(): void
+    public function testEveryOtherPauseIsShownWithItsCodeAndItsEnd(): void
     {
         $this->configure();
-        WpStub::answer(429, ['blad' => ['kod' => 'limit_minutowy_klucza', 'ponow_za_s' => 30]]);
-        WpStub::answer(503, ['blad' => ['kod' => 'kolejka_niedostepna']]);
+        WpStub::answer(429, ['blad' => ['kod' => 'limit_minutowy_klucza', 'ponow_za_s' => 30, 'komunikat' => self::KEY]]);
         $this->post('Limit minutowy.');
-        self::assertNull($this->plugin->log->pausedUntil());
-        $this->now += 30;
-        $this->post('Kolejka niedostępna.');
+        foreach (['notices' => $this->adminNotices(), 'settings page' => $this->settingsPage()] as $where => $html) {
+            self::assertStringContainsString('limit_minutowy_klucza', $html, $where);
+            self::assertStringContainsString(wp_date('H:i', $this->now + 30), $html, $where);
+            self::assertStringNotContainsString(substr(self::KEY, 0, 12), $html, $where);
+        }
 
+        $this->now += 30;
+        WpStub::networkFailure();
+        $this->post('Brama nie odpowiada.');
         self::assertCount(2, WpStub::$requests);
-        self::assertNull($this->plugin->log->pausedUntil(), 'the pause runs, but no notice');
-        self::assertNotNull($this->plugin->log->sendingPause());
+        $pause = $this->plugin->log->pausedUntil();
+        self::assertIsArray($pause);
+        self::assertSame([Log::PAUSE_WAIT, null], [$pause['kind'], $pause['code']], 'shown without a code');
+        self::assertStringContainsString(wp_date('H:i', $this->now + Submission::FIRST_BACKOFF_S), $this->adminNotices());
     }
 
     public function testTheGatewaysPauseIsComparedAsGivenNotAsTheRetryIsCapped(): void
@@ -368,7 +374,8 @@ final class SubmissionTest extends PluginTestCase
         $this->configure(['timeout_min' => Settings::MAX_TIMEOUT_MIN]);
         WpStub::answer(429, ['blad' => ['kod' => 'limit_dobowy_klucza', 'ponow_za_s' => 90000]]);
         $late = $this->post('Pauza dłuższa niż doba i niż czas oczekiwania.');
-        self::assertSame($this->now + 90000, $this->plugin->log->pausedUntil()['until'], 'the hour the gateway gave');
+        self::assertSame($this->now + Log::MAX_PAUSE_S, $this->plugin->log->pausedUntil()['until'],
+            'the pause kept is at most a day; the comment was judged by the 25 hours the gateway gave');
         self::assertSame(Meta::UNASSESSED, $this->field($late, Meta::STATUS));
         // During that pause a comment with a day's timeout gets the failure mode at once too.
         $during = $this->post('Komentarz w czasie pauzy dłuższej niż doba.');

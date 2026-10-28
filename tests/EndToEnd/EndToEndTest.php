@@ -146,7 +146,9 @@ final class EndToEndTest extends TestCase
 
         self::assertCount(4, WpStub::$requests, 'one more request for both');
         $last = json_decode(WpStub::$requests[3]['args']['body'], true)['elementy'];
-        self::assertSame(['wp:' . $ids[2], 'wp:' . $ids[3]], array_column($last, 'id'));
+        $sent = array_column($last, 'id');
+        sort($sent, SORT_NATURAL);
+        self::assertSame(['wp:' . $ids[2], 'wp:' . $ids[3]], $sent);
         foreach ([$ids[2], $ids[3]] as $id) {
             self::assertNotSame('', WpStub::$meta[$id][Meta::SUBMITTED_AT] ?? '', 'the mock took it: in `przyjete`');
         }

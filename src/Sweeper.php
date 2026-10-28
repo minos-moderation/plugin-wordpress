@@ -107,18 +107,26 @@ final class Sweeper
         if (!$this->settings->all()['enabled']) {
             return;
         }
-        $due = [];
         foreach ($this->wp->pendingCommentIds(self::BATCH) as $id) {
             // One comment that fails (another plugin's hook throwing) stops nothing else: it
             // keeps waiting, and the next sweep does its step again.
             try {
                 if ($this->submission->pastDeadline($id)) {
                     $this->outcome->timedOut($id, null);
-                } elseif ($this->submission->due($id)) {
-                    $due[] = $id;
                 }
             } catch (\Throwable $e) {
                 $this->outcome->failed(Log::STEP_TIMEOUT, $id);
+            }
+        }
+        // The retries by their own key: comments waiting for a verdict never fill this window.
+        $due = [];
+        foreach ($this->wp->retryCommentIds(self::BATCH) as $id) {
+            try {
+                if ($this->submission->due($id)) {
+                    $due[] = $id;
+                }
+            } catch (\Throwable $e) {
+                // Left to its own retry event or the next run.
             }
         }
         // Each comment and each request is isolated inside; anything else waits for the next run.

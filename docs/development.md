@@ -50,30 +50,38 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
 3. The answer (shared rule D9.6), for every comment of the request:
    - `202` → a comment whose item id is in `przyjete` is accepted; any other is retried
      after its own backoff, and the others are not held up.
-   - `429` (any code), `5xx` or no answer → the shared pause (`Log::pause`, option
-     `minos_moderation_paused`): nothing is sent until the gateway's `ponow_za_s` (as
-     given) or, without it, a doubling backoff from 60 s (at most an hour, counted from
-     the most failed attempts in the request) ends. Each comment of the request is retried
-     then (a one-off WP-Cron event, plus the sweep as a fallback), but gets the failure
-     mode at once when `ponow_za_s`, uncapped, ends at or after its receive timeout
-     (shared rule D9.3(a)). A pause running longer is never shortened by the answer to an
-     earlier request; the first `202` that takes a comment ends it.
+   - `429` (any code), `408` (as no answer), `5xx` or no answer → the shared pause
+     (`Log::pause`, option `minos_moderation_paused`): nothing is sent until the gateway's
+     `ponow_za_s` or, without it, a doubling backoff from 60 s (at most an hour, counted
+     from the most failed attempts in the request) ends, and never more than a day
+     (`Log::MAX_PAUSE_S`): while nothing is sent no `202` can end it. Each comment of the
+     request is retried then (a one-off WP-Cron event, plus the sweep as a fallback), but
+     gets the failure mode at once when `ponow_za_s` as given (clamped at a year only to
+     stay an integer) ends at or after its receive timeout (shared rule D9.3(a)). A pause
+     running longer is never shortened by the answer to an earlier request; it ends with
+     the first `202` that takes a comment, or when the administrator changes the key, the
+     secret, the gateway's address or the switch (`Submission::onSettingsSaved`,
+     `onCredentialsSaved`).
    - a refusal of one item (`blad.element` with `brak_tekstu`, `limit_dlugosci`,
      `bledny_identyfikator` or `powtorzony_identyfikator`) → that comment gets the failure
      mode, and the others are sent again at once (the gateway took none of them, and such
      a refusal costs the key nothing).
    - anything else → a configuration error for every comment of the request: the failure
-     mode, a log entry and an admin notice.
+     mode, a log entry and an admin notice. That includes a `2xx` other than `202`, even
+     one with every item in `przyjete`: only `202` accepts.
 
    While the pause runs, a new or edited comment is not sent in the author's or editor's
    request: it stays held with its retry due when the pause ends, or gets the failure mode
    at once when the gateway's own `ponow_za_s` ends at or after its timeout (the plugin's
    backoff never does that). A retry event sends its comment first, with the other due
    ones, up to 20 items a request (`Submission::MAX_ITEMS`); the sweep sends due retries
-   in at most `Sweeper::MAX_REQUESTS` (5) requests. Both stop at the first answer that asks
-   to wait. A daily limit (`limit_dobowy_klucza`) or an overload (`limit_globalny_b2b`,
-   `kolejka_pelna`) is also shown as "the gateway refuses until T" on every admin screen
-   and the settings page, until T or the first `202`.
+   in at most `Sweeper::MAX_REQUESTS` (5) HTTP requests, a request sent again after a
+   refused item counted too (a retry event: one). Both stop at the first answer that asks
+   to wait, and both find the due retries by the meta key `_minos_retry_at` alone (set
+   until the `202` or the settlement), so comments that only wait for their verdict never
+   crowd them out. Every pause is shown until T on every admin screen and the settings
+   page: a daily limit (`limit_dobowy_klucza`) and an overload (`limit_globalny_b2b`,
+   `kolejka_pelna`) with their own words, any other with its code.
 4. The webhook applies the verdict to a comment still marked `oczekuje`, or to one the
    plugin published under fail-open (`_minos_auto_published`), when the verdict is for the
    comment's current revision (`_minos_revision`) and the comment still reads as the text
@@ -85,7 +93,8 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
    20 minutes), counted from the gateway's `202`, or from the hold while it was never
    accepted. It finds waiting comments by the meta key `_minos_waiting` alone, set while a
    comment waits and removed when it is settled, never by a meta value (`_minos_status`
-   stays, and grows with every comment ever assessed).
+   stays, and grows with every comment ever assessed), and the due retries by
+   `_minos_retry_at` alone (step 3).
 
 With `enabled` off the plugin does nothing: no hold, no submission, no retry, no sweep, and
 the webhook answers `404`. Waiting comments stay in WordPress's queue for a person. Only the
@@ -183,7 +192,7 @@ Decisions worth knowing before changing anything:
   settings page's 7-day numbers (`Stats`, each time an administrator opens Settings →
   Minos; `_minos_decided_at` ≥ a week ago, at most 2000 comments, their meta primed in one
   query) ask by a meta value. What runs often asks by the meta key alone, which WordPress indexes: the
-  sweep (every 5 minutes, `_minos_waiting`) and the support notice on the comments screen
+  sweep and the retry events (`_minos_waiting`, `_minos_retry_at`) and the support notice on the comments screen
   (every view, `_minos_wsparcie`, written only as `1`, with the comment date for the 7 days).
 - **Not done:** translation files (the source strings are Polish, in `__()` with the
   `minos-moderation` domain, and `languages/` is loaded when present).

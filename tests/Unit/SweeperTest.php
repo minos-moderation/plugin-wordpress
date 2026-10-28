@@ -142,11 +142,12 @@ final class SweeperTest extends PluginTestCase
         WpStub::$queries = [];
 
         self::assertSame([$waiting], $this->plugin->wp->pendingCommentIds(Sweeper::BATCH));
+        WpStub::$queries = [];
         do_action(Sweeper::HOOK);
 
-        self::assertNotEmpty(WpStub::$queries, 'the sweep queried comments');
+        self::assertSame([Meta::WAITING, Meta::RETRY_AT], array_column(WpStub::$queries, 'meta_key'),
+            'the timeouts by the waiting mark, the retries by their own key');
         foreach (WpStub::$queries as $query) {
-            self::assertSame(Meta::WAITING, $query['meta_key'] ?? null);
             self::assertArrayNotHasKey('meta_value', $query, 'never a query by meta value');
             self::assertArrayNotHasKey('meta_query', $query);
         }

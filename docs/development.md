@@ -58,7 +58,8 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
    plugin published under fail-open (`_minos_auto_published`), when the verdict is for the
    comment's current revision (`_minos_revision`) and the comment still reads as the text
    that was sent (`_minos_sent_hash`); anything else gets `200` and nothing else, and a
-   comment whose text changed is sent again as its next revision. The moderator's e-mail
+   comment whose text changed is reopened as its next revision, which WP-Cron sends (the
+   webhook never calls the gateway before it answers). The moderator's e-mail
    WordPress held back goes out from WP-Cron.
 5. The sweep gives the failure mode to a comment that waited past the timeout (at least
    20 minutes), counted from the gateway's `202`, or from the hold while it was never
@@ -96,7 +97,8 @@ Decisions worth knowing before changing anything:
   hold, as in the phpBB plugin). An edit of an assessed comment is the editor's decision
   and is not sent (reassessing those is a separate, postponed item). Before every verdict
   the receiver compares `_minos_sent_hash` with the current text; a mismatch (a write
-  without `edit_comment`) sends the next revision instead of applying the verdict. The
+  without `edit_comment`) reopens the next revision instead of applying the verdict, and a
+  retry due at once sends it from WP-Cron (`Submission::reassessLater`). The
   plugin's own masked write is not an edit (`Outcome::writing`).
 - **Block boundaries.** `Text::plain` turns block tags (`blockquote`, `p`, `div`, `li`,
   `ul`, `ol`, `pre`, `h1`–`h6`, `br`) into line breaks after the `title`/`alt` text is

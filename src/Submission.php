@@ -204,10 +204,7 @@ final class Submission
         }
         foreach ($this->wp->pendingCommentIds(self::RESUME_BATCH) as $id) {
             try {
-                if ($this->reopen($id)) {
-                    $this->wp->setMeta($id, Meta::RETRY_AT, $this->wp->now());
-                    $this->wp->scheduleOnce($this->wp->now(), self::HOOK_RETRY, [$id]);
-                } else {
+                if (!$this->reassessLater($id)) {
                     $this->outcome->abandon($id);
                 }
             } catch (\Throwable $e) {
@@ -232,6 +229,24 @@ final class Submission
             return false;
         }
         $this->submitIsolated($id);
+        return true;
+    }
+
+    /**
+     * {@see reassess}, with the request left to WP-Cron: for the webhook, which answers the
+     * gateway at once, and for switching the plugin on again. The retry is due now; the
+     * sweep sends it too if its event is lost.
+     *
+     * @param int $id The comment.
+     * @return bool False when the comment is gone or a person decided on it meanwhile.
+     */
+    public function reassessLater(int $id): bool
+    {
+        if (!$this->reopen($id)) {
+            return false;
+        }
+        $this->wp->setMeta($id, Meta::RETRY_AT, $this->wp->now());
+        $this->wp->scheduleOnce($this->wp->now(), self::HOOK_RETRY, [$id]);
         return true;
     }
 

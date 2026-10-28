@@ -6,6 +6,7 @@ namespace Minos\WordPress\Tests\Unit;
 
 use Minos\WordPress\Meta;
 use Minos\WordPress\Settings;
+use Minos\WordPress\Submission;
 use Minos\WordPress\Sweeper;
 use WpStub;
 
@@ -29,6 +30,18 @@ final class RevisionTest extends PluginTestCase
             $ids[] = json_decode($request['args']['body'], true)['elementy'][0]['id'];
         }
         return $ids;
+    }
+
+    /**
+     * Runs the retry events WP-Cron holds as due now.
+     */
+    private function runDueRetries(): void
+    {
+        foreach (self::events(Submission::HOOK_RETRY) as $event) {
+            if ($event['at'] <= $this->now) {
+                do_action($event['hook'], ...$event['args']);
+            }
+        }
     }
 
     public function testAnEditWhileWaitingIsSentAsTheNextRevisionAndTheOldVerdictChangesNothing(): void
@@ -87,7 +100,10 @@ final class RevisionTest extends PluginTestCase
         self::assertSame('0', $this->field($id, 'comment_approved'));
         self::assertSame('Podmieniona treść testowa.', $this->field($id, 'comment_content'));
         self::assertSame([], WpStub::$statusChanges);
-        self::assertSame(['wp:' . $id . '.1'], $this->idsSentFrom($before));
+        self::assertSame([], $this->idsSentFrom($before), 'the webhook answers without calling the gateway');
+        self::assertSame('1', $this->field($id, Meta::REVISION));
+        $this->runDueRetries();
+        self::assertSame(['wp:' . $id . '.1'], $this->idsSentFrom($before), 'WP-Cron sends the next revision');
         self::assertSame('Podmieniona treść testowa.', $this->sentBody()['elementy'][0]['tekst']);
         self::assertTrue($this->pending($id));
     }
@@ -103,8 +119,25 @@ final class RevisionTest extends PluginTestCase
         self::assertSame(200, $this->deliver(self::verdict($id, 'bezpieczne')));
 
         self::assertSame('0', $this->field($id, 'comment_approved'));
+        self::assertSame([], $this->idsSentFrom($before), 'nothing sent from the webhook');
+        $this->runDueRetries();
         self::assertSame(['wp:' . $id . '.1'], $this->idsSentFrom($before));
         self::assertSame(['Zgoda', 'zakazane'], preg_split('/\s+/u', $this->sentBody()['elementy'][0]['tekst']));
+    }
+
+    public function testTheWebhookNeverCallsTheGatewayAndTheSweepSendsALostRetry(): void
+    {
+        $this->configure();
+        $id = $this->post('Komentarz zmieniony bez haka edycji.');
+        WpStub::$comments[$id]['comment_content'] = 'Treść zmieniona bez haka edycji.';
+        $before = count(WpStub::$requests);
+
+        self::assertSame(200, $this->deliver(self::verdict($id, 'bezpieczne')));
+        self::assertSame([], $this->idsSentFrom($before));
+
+        WpStub::$events = [];
+        do_action(Sweeper::HOOK);
+        self::assertSame(['wp:' . $id . '.1'], $this->idsSentFrom($before), 'due at once: the sweep sends it');
     }
 
     public function testAVerdictForAnotherRevisionIs200AndChangesNothing(): void

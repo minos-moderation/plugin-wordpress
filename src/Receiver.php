@@ -25,7 +25,8 @@ defined('ABSPATH') || exit;
  *    no longer change (unknown, handled already — deliveries repeat —, decided by a person,
  *    or another revision than the comment's current one) gets `200` and nothing else;
  * 4. the verdict applied ({@see Outcome}) — only while the comment still reads as the text
- *    that was sent; a comment edited since is sent again as its next revision instead;
+ *    that was sent; a comment edited since is held for its next revision instead, which
+ *    WP-Cron sends (the webhook itself never calls the gateway);
  * 5. `200` at once: the only slow step, the e-mail, goes to WP-Cron. When applying fails
  *    with an exception (another plugin's hook), `500`: the comment still waits, so the
  *    gateway's next delivery of the verdict is applied, not dropped as a repeat.
@@ -124,7 +125,8 @@ final class Receiver
         try {
             if ($this->outcome->readsAsSent($id)) {
                 $this->outcome->verdict($id, $payload);
-            } elseif (!$this->submission->reassess($id)) {
+            } elseif (!$this->submission->reassessLater($id)) {
+                // Sent from WP-Cron: the webhook answers at once and never calls the gateway.
                 $this->outcome->abandon($id);
             }
         } catch (\Throwable $e) {

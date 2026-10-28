@@ -80,7 +80,11 @@ final class Text
      * reads `zakazane`, as a reader sees it.
      *
      * Attribute text is assessed like any other text: a reader sees it (a tooltip, an
-     * image's alternative), so dropping it would let words past the assessment. A block
+     * image's alternative), so dropping it would let words past the assessment. It goes
+     * with the comment's own text only: a comment whose only content is attribute text (an
+     * image with its `alt`, a blank link with a `title`) has no text to assess
+     * ({@see ownText}, shared rule F7), because a verdict on the `alt` would stand for an
+     * image the gateway never saw. A block
      * boundary is a line break for the reader too: without it,
      * `<blockquote>Zgoda</blockquote>zakazane` would read `Zgodazakazane` and the second
      * word would go unassessed.
@@ -101,6 +105,26 @@ final class Text
         $text = preg_replace(self::BLOCK, "\n", $text) ?? $text;
         $text = html_entity_decode(strip_tags($text), ENT_QUOTES | ENT_HTML5, 'UTF-8');
         return self::trim($text);
+    }
+
+    /**
+     * The comment's own text: {@see plain} without the text of `title` and `alt`
+     * attributes. When it is empty the comment has no text to assess, whatever its
+     * attributes say (shared rule F7): an image is not text, and its `alt` is sent only
+     * beside text a reader sees.
+     *
+     * @param string $html The stored comment content.
+     * @return string The text, or '' when the content is not valid UTF-8.
+     */
+    public static function ownText(string $html): string
+    {
+        if (preg_match('//u', $html) !== 1) {
+            return '';
+        }
+        // As in plain(): a regex that gives up leaves its input, so more text, never less.
+        $text = preg_replace('@<(script|style)[^>]*?>.*?</\\1>@si', '', $html) ?? $html;
+        $text = preg_replace(self::BLOCK, "\n", $text) ?? $text;
+        return self::trim(html_entity_decode(strip_tags($text), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
     }
 
     /**

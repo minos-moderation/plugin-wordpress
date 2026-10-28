@@ -86,6 +86,18 @@ final class TextTest extends PluginTestCase
         self::assertSame('zakazane', Text::plain('zak<a href="https://a.example/">a</a>zane'));
     }
 
+    public function testTheOwnTextLeavesAttributeTextOut(): void
+    {
+        foreach (['<img src="x.png" alt="foto">', '<img alt="foto" title="wakacje" />', '<a href="https://a.example/" title="kup">&nbsp;</a>',
+            "<p>\n<img alt='foto'>\n</p>", '<script>alert(1)</script><img alt="foto">'] as $html) {
+            self::assertSame('', Text::ownText($html), $html);
+            self::assertNotSame('', Text::plain($html), 'the attribute text alone: ' . $html);
+        }
+        self::assertSame('Zobacz', Text::ownText('Zobacz <img src="x.png" alt="foto">'));
+        self::assertSame('ok', Text::ownText('<abbr title="ukryte słowo">ok</abbr>'));
+        self::assertSame('', Text::ownText("\xC3\x28"), 'not UTF-8');
+    }
+
     public function testTheTextOfTitleAndAltIsStillKeptInPlace(): void
     {
         self::assertSame(['ukryte', 'słowo', 'ok'], preg_split('/\s+/u', Text::plain('<abbr title="ukryte słowo">ok</abbr>')));

@@ -95,6 +95,16 @@ final class SubmissionTest extends PluginTestCase
             $this->sentBody()['elementy'][0]['tekst']);
     }
 
+    public function testAnImagesAltIsSentBesideTheCommentsOwnText(): void
+    {
+        $this->configure();
+        $id = $this->post('Zobacz <img src="https://obrazek.example/a.png" alt="foto" /> z wakacji');
+
+        self::assertTrue($this->pending($id));
+        self::assertSame(['Zobacz', 'foto', 'z', 'wakacji'],
+            preg_split('/\s+/u', $this->sentBody()['elementy'][0]['tekst']), 'the alt in its place, beside the words');
+    }
+
     public function testALongCommentIsMarkedAsCut(): void
     {
         $this->configure();
@@ -546,10 +556,19 @@ final class SubmissionTest extends PluginTestCase
     {
         $link = '<a href="https://kasyno.example/bonus">&nbsp;</a>';
         $image = '<img src="https://obrazek.example/a.png" />';
+        // Shared rule F7: an image is not text, and its `alt` or `title` alone is no text to
+        // assess; neither is the `title` of a link with a blank text.
+        $described = '<img src="https://obrazek.example/a.png" alt="foto" />';
+        $titled = '<p><img src="https://obrazek.example/a.png" alt="foto" title="wakacje" /></p>';
+        $blankLink = '<a href="https://kasyno.example/bonus" title="kup teraz">&nbsp;</a>';
         return [
             'a link with a blank text, fail-closed' => [$link, Settings::FAIL_CLOSED, '0'],
             'a link with a blank text, fail-open'   => [$link, Settings::FAIL_OPEN, '1'],
             'an image without alt, fail-closed'     => [$image, Settings::FAIL_CLOSED, '0'],
+            'an image with alt, fail-closed'        => [$described, Settings::FAIL_CLOSED, '0'],
+            'an image with alt, fail-open'          => [$described, Settings::FAIL_OPEN, '1'],
+            'an image with alt and title'           => [$titled, Settings::FAIL_CLOSED, '0'],
+            'a blank link with a title'             => [$blankLink, Settings::FAIL_CLOSED, '0'],
         ];
     }
 

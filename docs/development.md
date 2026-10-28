@@ -142,8 +142,11 @@ Decisions worth knowing before changing anything:
   taken out, and drops inline tags without a trace: `<blockquote>Zgoda</blockquote>zakazane`
   is sent as two words, `zak<b>a</b>zane` as one. The changed text changes the hash of
   comments in flight during an update; their verdicts then send the next revision instead.
-- **No text to assess is the failure mode** (shared rule D9.5). A comment whose plain text
-  is empty (a link with a blank text, an image without `alt`) is held and gets the failure
+- **No text to assess is the failure mode** (shared rules D9.5, F7). A comment whose plain
+  text is empty (a link with a blank text, an image without `alt`), or whose own text is
+  (`Text::ownText`: no text but that of `title` and `alt` attributes, as an image with its
+  `alt` or a blank link with a `title`; the gateway assesses no image, and a verdict on its
+  `alt` would stand for the image), is held and gets the failure
   mode at once, without a request, with `_minos_error` `brak_tekstu_do_oceny` (the plugin's
   own code, not the gateway's `brak_tekstu`) shown in the "Minos" column; under fail-open
   the publication is marked as one without an assessment.

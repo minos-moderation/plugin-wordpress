@@ -529,11 +529,11 @@ final class Submission
             $this->outcome->withoutVerdict($id, Meta::ERROR_NOT_CONFIGURED);
             return null;
         }
-        $plain = Text::plain((string)$comment->comment_content);
-        if (Text::cut($plain) === '') {
-            // Nothing to assess (a link with a blank text, an image without alternative
-            // text): no request, no verdict, no guess - the failure mode at once (shared
-            // rule D9.5), with the reason for the moderator.
+        $content = (string)$comment->comment_content;
+        if (Text::cut(Text::plain($content)) === '' || Text::ownText($content) === '') {
+            // Nothing to assess (a link with a blank text, an image with or without its
+            // alternative text and nothing else): no request, no verdict, no guess - the
+            // failure mode at once (shared rules D9.5, F7), with the reason for the moderator.
             $this->outcome->withoutVerdict($id, Meta::ERROR_NO_TEXT);
             return null;
         }

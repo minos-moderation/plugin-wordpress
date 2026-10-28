@@ -163,9 +163,10 @@ Zasady, które obowiązują zawsze:
 
 Komentarz nie dostaje werdyktu, gdy brama odpowie „nieocenione”, gdy werdykt nie nadejdzie
 w czasie oczekiwania, gdy brama odrzuci komentarz z powodu błędu konfiguracji (np. zły
-klucz) albo gdy komentarz nie ma tekstu do oceny (np. sam odnośnik bez treści albo obrazek
-bez opisu — taki komentarz nie jest wysyłany, a kolumna **Minos** podaje powód „brak tekstu
-do oceny”). Wtedy:
+klucz) albo gdy komentarz nie ma tekstu do oceny (np. sam odnośnik bez treści albo sam
+obrazek — także z opisem `alt` lub `title`, bo brama nie ocenia obrazów, a werdykt o samym
+opisie dotyczyłby czegoś, czego nie widziała; taki komentarz nie jest wysyłany, a kolumna
+**Minos** podaje powód „brak tekstu do oceny”). Wtedy:
 
 - **fail-closed** (domyślnie) — komentarz zostaje do ręcznej moderacji;
 - **fail-open** — komentarz zostaje opublikowany (o ile WordPress sam by go opublikował).
@@ -209,7 +210,7 @@ Wysyłane są wyłącznie:
 - identyfikator komentarza w postaci `wp:<numer>` (sam numer, bez treści), a dla tekstu
   zmienionego przed oceną `wp:<numer>.<wersja>`;
 - tekst komentarza bez znaczników HTML, razem z tekstem atrybutów `title` i `alt`
-  (czytelnik też go widzi), z granicami akapitów, cytatów, list i nagłówków jako nowymi
+  (czytelnik też go widzi; sam opis obrazka bez innego tekstu nie jest wysyłany), z granicami akapitów, cytatów, list i nagłówków jako nowymi
   wierszami (tak jak widzi je czytelnik) — **pierwsze 3000 znaków**: dłuższy komentarz jest oceniany na
   podstawie pierwszych 3000 znaków, a dalsza część nie jest oceniana (patrz „Jak to
   działa”);

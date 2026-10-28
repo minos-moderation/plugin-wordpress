@@ -247,6 +247,7 @@ final class SettingsPage
                     Settings::HOLD         => __('zostaw do ręcznej moderacji', 'minos-moderation'),
                     Settings::BLOCKED_SPAM => __('oznacz jako spam', 'minos-moderation'),
                 ]);
+                self::help(__('Komentarz z sygnałem wsparcia (możliwe samookaleczenie) zawsze zostaje do ręcznej moderacji: wtyczka nigdy nie oznacza go jako spam, a opublikowanego nie zdejmuje ze strony także po spóźnionym werdykcie — decyduje moderator.', 'minos-moderation'));
                 break;
             case 'notice_text':
                 printf('<textarea class="large-text" rows="4" id="%s" name="%s" placeholder="%s">%s</textarea>',

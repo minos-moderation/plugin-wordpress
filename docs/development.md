@@ -125,8 +125,18 @@ Decisions worth knowing before changing anything:
   keeps its status; only the verdict is recorded.
 - **Late verdicts.** Under fail-open the timeout publishes and sets
   `_minos_auto_published`; a verdict arriving later is applied (`zablokowane` → hold,
-  `ocenzurowane` → per setting). `transition_comment_status` clears the flag, so a
-  person's status change after the publication stands.
+  `ocenzurowane` → per setting), except that a comment with `wsparcie` stays published
+  (shared rule A7, below). `transition_comment_status` clears the flag, so a person's
+  status change after the publication stands.
+- **The support cue (shared rule A7).** `wsparcie` is recorded as `_minos_wsparcie` = `1`
+  whatever the verdict, and a comment that carries it is never marked as spam nor taken
+  off the page by the plugin: `zablokowane` holds it whatever `blocked_mode` says
+  (`Outcome::action`), and a late verdict leaves a fail-open publication published
+  (`Outcome::applyLate`; a fitting mask still replaces its content, one that does not
+  waits in `_minos_masked`). The moderators see it in the "Minos" column, in the
+  comments screen's notice (comments of the last 7 days) and, for a held comment, in the
+  "awaiting moderation" e-mail (`comment_moderation_text`, `Outcome::filterModerationText`).
+  Nothing goes to the comment's author.
 - **Revisions.** A verdict is about the text that was sent. `Submission::onEdit`
   (`edit_comment`) sends a comment again as `wp:<ID>.<n>` (`_minos_revision`, absent = 0,
   fresh `_minos_held_at`) when its text changed while it waited for its verdict, or after
@@ -148,8 +158,9 @@ Decisions worth knowing before changing anything:
   `alt` or a blank link with a `title`; the gateway assesses no image, and a verdict on its
   `alt` would stand for the image), or holds nothing a reader sees (`Text::hasOwnText`:
   whitespace, separators, format characters such as a zero-width space, a soft hyphen, a
-  word joiner or a byte order mark, controls, the blank fillers; when that check cannot
-  run, the comment is sent), is held and gets the failure
+  word joiner or a byte order mark, marks with nothing to combine with such as a lone
+  U+034F or U+FE0F (a letter keeps its accent: `e` + U+0301 is text), controls, the blank
+  fillers; when that check cannot run, the comment is sent), is held and gets the failure
   mode at once, without a request, with `_minos_error` `brak_tekstu_do_oceny` (the plugin's
   own code, not the gateway's `brak_tekstu`) shown in the "Minos" column; under fail-open
   the publication is marked as one without an assessment.
@@ -192,9 +203,9 @@ Decisions worth knowing before changing anything:
   `Platform` slashes it; the stubs unslash too, and a test holds a backslash.
 - **Notifications.** A `notify_moderator` filter suppresses the "awaiting moderation" e-mail
   while a comment is `oczekuje`; when the outcome holds it, `wp_new_comment_notify_moderator`
-  runs from WP-Cron. The post's author is mailed by core itself on approval
-  (`wp_set_comment_status` hooks `wp_new_comment_notify_postauthor`), so the plugin never
-  sends that one.
+  runs from WP-Cron, and its text carries the support cue when the comment has one. The
+  post's author is mailed by core itself on approval (`wp_set_comment_status` hooks
+  `wp_new_comment_notify_postauthor`), so the plugin never sends that one.
 - **Retention (shared rule D9.11).** `Outcome::settle` records `_minos_decided_at`;
   `Retention` (hourly, `Retention::BATCH` a run, also while switched off) removes every
   `_minos_*` key of a comment settled more than 30 days ago — the original of a masked
@@ -240,7 +251,9 @@ changed; approval mails the post's author), `transition_comment_status`,
 `update_option_{$option}` (old and new value, only on a change), `pre_http_request` and the
 `schedule_event` filter (run inside `wp_remote_post` / `wp_schedule_single_event`; another
 plugin's callback may throw there), `get_comments` with `meta_compare` / `meta_type`,
-`wp_new_comment_notify_moderator`, `wp_new_comment_notify_postauthor`,
+`wp_new_comment_notify_moderator`, `comment_moderation_text` (the text and the comment id,
+in `wp_notify_moderator`; once per e-mail on 6.0, once per recipient on 7.1),
+`wp_new_comment_notify_postauthor`,
 `load_plugin_textdomain`, `register_activation_hook`, `register_deactivation_hook`,
 `WP_UNINSTALL_PLUGIN`.
 
@@ -341,11 +354,13 @@ JSON on disk: never send real comments to it.
 
 `composer.json` requires `minos-moderation/client-php` at `dev-main` from its GitHub
 repository (a `vcs` repository entry); `composer.lock` pins the exact commit, so a build is
-reproducible. Until the client's `v0.1.0` tag exists, the lock IS the pin (commit
-`fc4beb7`); once it does, replace `dev-main` with `^0.1` and run
-`composer update minos-moderation/client-php`. To move the pin before that, run the same
-update after reviewing the client's change, and commit the lock. The plugin never forks
-the client's verification.
+reproducible. The lock IS the pin: commit `fc4beb7` of the client's `main`, from before
+the client's first release. The client has no release tag yet; its first two are to stand
+at `7d58a76` (`v0.1.0`) and `e5df7d6` (`v0.2.0`, which only adds to 0.1.0). The plugin
+moves to them in a pull request of its own: replace `dev-main` with `^0.2`, run
+`composer update minos-moderation/client-php` and commit the lock. Until then, move the
+pin only with the same update at a reviewed commit of the client's `main`. The plugin
+never forks the client's verification.
 
 `config.platform-check` is off: WordPress's `Requires PHP: 7.4` header already refuses
 older hosts, and Composer's check would stop the whole site instead.

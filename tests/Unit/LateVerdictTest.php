@@ -78,6 +78,36 @@ final class LateVerdictTest extends PluginTestCase
         self::assertSame('no to jest ████ pomysł', $this->field($short, Meta::MASKED));
     }
 
+    /**
+     * Shared rule A7: a fail-open publication with the support cue is never taken off the
+     * page by the plugin. A late verdict that would hold it leaves it published until a
+     * person decides; the verdict, the cue and an unpublished mask are recorded for the
+     * moderator.
+     */
+    public function testALateVerdictWithTheSupportCueLeavesThePublicationInPlace(): void
+    {
+        $blocked = $this->autoPublished('Komentarz testowy z sygnałem wsparcia, zablokowany później.',
+            ['blocked_mode' => Settings::BLOCKED_SPAM]);
+        $changes = WpStub::$statusChanges;
+
+        self::assertSame(200, $this->deliver(self::verdict($blocked, 'zablokowane',
+            ['kategorie' => ['samookaleczenie'], 'wsparcie' => true])));
+
+        self::assertSame(['1', 'zablokowane', '1'], [$this->field($blocked, 'comment_approved'),
+            $this->field($blocked, Meta::STATUS), $this->field($blocked, Meta::SUPPORT)]);
+        self::assertSame($changes, WpStub::$statusChanges, 'neither held nor marked as spam');
+        self::assertNull($this->field($blocked, Meta::AUTO_PUBLISHED), 'settled: a repeat changes nothing');
+        self::assertSame([], self::events(Outcome::HOOK_NOTIFY));
+
+        $censored = $this->autoPublished('no to jest głupi pomysł', ['censored_mode' => Settings::HOLD]);
+        $changes = WpStub::$statusChanges;
+        $this->deliver(self::verdict($censored, 'ocenzurowane',
+            ['ocenzurowany' => 'no to jest █████ pomysł', 'wsparcie' => true]));
+        self::assertSame(['1', 'no to jest głupi pomysł', 'no to jest █████ pomysł'], [$this->field($censored, 'comment_approved'),
+            $this->field($censored, 'comment_content'), $this->field($censored, Meta::MASKED)]);
+        self::assertSame($changes, WpStub::$statusChanges);
+    }
+
     public function testALateSafeOrUnassessedVerdictLeavesItPublished(): void
     {
         $safe = $this->autoPublished('Komentarz, który okaże się bezpieczny.');

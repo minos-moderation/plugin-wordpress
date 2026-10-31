@@ -75,12 +75,13 @@ final class ContentTest extends IntegrationTestCase
 
     /**
      * @return array<string,array{0:string}> Content a visitor posts: an image or a blank link,
-     *     with attribute text, beside one character a reader does not see.
+     *     with attribute text, beside one character a reader does not see (a format
+     *     character, or a combining mark with nothing to combine with).
      */
     public static function invisibleOnly(): array
     {
         $cases = [];
-        foreach (['&#8203;', '&shy;', '&#8288;', '&#65279;'] as $character) {
+        foreach (['&#8203;', '&shy;', '&#8288;', '&#65279;', '&#847;', '&#65039;'] as $character) {
             $cases["a blank link with a title, {$character}"] = ['<a href="https://kasyno.example/bonus" title="kup teraz">'
                 . $character . '</a>'];
             $cases["an image with alt, {$character}"] = ['<img src="https://obrazek.example/a.png" alt="ładny kot" />' . $character];

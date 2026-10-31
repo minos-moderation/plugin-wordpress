@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Minos\WordPress\Tests\Integration;
 
+use Minos\WordPress\Admin\CommentsScreen;
 use Minos\WordPress\Meta;
 use Minos\WordPress\Outcome;
 use Minos\WordPress\Settings;
@@ -53,6 +54,86 @@ final class StatusAndMailTest extends IntegrationTestCase
 
         $recipients = array_column(self::mails(), 0);
         self::assertContains(get_option('admin_email'), $recipients, 'the moderator is told now');
+    }
+
+    /**
+     * Shared rule A7 on the real WordPress: under "mark as spam" a blocked comment with the
+     * support cue stays held for a person, and the moderator's e-mail WordPress composes
+     * names the cue; the comment's author gets nothing. Without the cue the setting applies.
+     */
+    public function testABlockedCommentWithTheSupportCueStaysHeldAndTheModeratorsEmailNamesIt(): void
+    {
+        $this->startGateway(['blocked_mode' => Settings::BLOCKED_SPAM]);
+        $support = $this->post('Komentarz testowy z sygnałem wsparcia.');
+        $plain = $this->post('Komentarz testowy bez sygnału.');
+
+        self::assertSame(200, $this->serveSigned(self::verdict($support, 'zablokowane',
+            ['kategorie' => ['samookaleczenie'], 'wsparcie' => true])));
+        self::assertSame(200, $this->serveSigned(self::verdict($plain, 'zablokowane', ['kategorie' => ['nekanie']])));
+
+        self::assertSame(['0', 'zablokowane', '1'], [self::row($support)['comment_approved'],
+            self::stored($support, Meta::STATUS), self::stored($support, Meta::SUPPORT)]);
+        self::assertSame('spam', self::row($plain)['comment_approved'], 'without the cue the setting applies');
+        self::assertSame([[$support]], array_column(self::events(Outcome::HOOK_NOTIFY), 'args'));
+        self::assertSame([], self::mails(), 'the webhook answers without sending e-mail');
+
+        do_action(Outcome::HOOK_NOTIFY, $support);
+
+        $mails = self::mails();
+        self::assertNotSame([], $mails, 'the moderator is told');
+        foreach ($mails as [$to, , $text]) {
+            self::assertStringNotContainsString(self::row($support)['comment_author_email'], $to, 'never its author');
+            self::assertStringContainsString(CommentsScreen::supportAdvice(), $text);
+        }
+        self::assertContains(get_option('admin_email'), array_column($mails, 0));
+
+        // The post's author (an Author: may edit the comments on their post, may not
+        // moderate) comments on their own post, which WordPress mails them about.
+        add_filter('comment_flood_filter', '__return_false');
+        wp_set_current_user($this->authorId);
+        $own = $this->post('Komentarz testowy autora pod własnym wpisem.');
+        $control = $this->post('Drugi komentarz testowy autora, bez sygnału.');
+        wp_set_current_user(0);
+        self::assertSame([self::AUTHOR_EMAIL, self::AUTHOR_EMAIL],
+            [self::row($own)['comment_author_email'], self::row($control)['comment_author_email']]);
+        self::assertSame(200, $this->serveSigned(self::verdict($own, 'zablokowane',
+            ['kategorie' => ['samookaleczenie'], 'wsparcie' => true])));
+        // Held without the cue: an `ocenzurowane` with no masked text.
+        self::assertSame(200, $this->serveSigned(self::verdict($control, 'ocenzurowane')));
+        self::assertSame(['0', '0'], [self::row($own)['comment_approved'], self::row($control)['comment_approved']]);
+
+        reset_phpmailer_instance();
+        do_action(Outcome::HOOK_NOTIFY, $control);
+        self::assertContains(self::AUTHOR_EMAIL, array_column(self::mails(), 0),
+            'the guard: WordPress mails the post\'s author about a held comment on their post');
+
+        // Their account's address changed since the comment: WordPress mails the new one.
+        $changed = wp_update_user(['ID' => $this->authorId, 'user_email' => 'nowy.adres.autora@example.invalid']);
+        self::assertSame($this->authorId, $changed);
+        reset_phpmailer_instance();
+        do_action(Outcome::HOOK_NOTIFY, $own);
+        $mails = self::mails();
+        self::assertSame([get_option('admin_email')], array_column($mails, 0), 'never its author, who wrote the post');
+        self::assertStringContainsString(CommentsScreen::supportAdvice(), $mails[0][2]);
+    }
+
+    /**
+     * Shared rule A7: a late `zablokowane` with the support cue leaves a fail-open
+     * publication published until a person decides.
+     */
+    public function testALateBlockedVerdictWithTheSupportCueLeavesAFailOpenPublicationPublished(): void
+    {
+        $this->startGateway(['failure_mode' => Settings::FAIL_OPEN, 'blocked_mode' => Settings::BLOCKED_SPAM]);
+        $id = $this->post('Komentarz testowy opublikowany bez werdyktu.');
+        self::age($id, 21 * 60);
+        do_action(Sweeper::HOOK);
+        self::assertSame('1', self::row($id)['comment_approved']);
+
+        self::assertSame(200, $this->serveSigned(self::verdict($id, 'zablokowane',
+            ['kategorie' => ['samookaleczenie'], 'wsparcie' => true])));
+
+        self::assertSame(['1', 'zablokowane', '1', null], [self::row($id)['comment_approved'],
+            self::stored($id, Meta::STATUS), self::stored($id, Meta::SUPPORT), self::stored($id, Meta::AUTO_PUBLISHED)]);
     }
 
     public function testAPersonsDecisionAfterAFailOpenPublicationStandsAgainstALateVerdict(): void

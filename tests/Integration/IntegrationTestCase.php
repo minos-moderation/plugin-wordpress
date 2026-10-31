@@ -338,9 +338,10 @@ abstract class IntegrationTestCase extends \WP_UnitTestCase
     }
 
     /**
-     * The e-mails WordPress sent in this test, as `[to, subject]`.
+     * The e-mails WordPress sent in this test, as `[to, subject, text]`, the text decoded
+     * from its transfer encoding.
      *
-     * @return array<int,array{0:string,1:string}>
+     * @return array<int,array{0:string,1:string,2:string}>
      */
     protected static function mails(): array
     {
@@ -350,7 +351,14 @@ abstract class IntegrationTestCase extends \WP_UnitTestCase
             foreach ($mail['to'] as $recipient) {
                 $to[] = $recipient[0];
             }
-            $mails[] = [implode(',', $to), (string)$mail['subject']];
+            $text = (string)$mail['body'];
+            $header = (string)$mail['header'];
+            if (stripos($header, 'Content-Transfer-Encoding: quoted-printable') !== false) {
+                $text = quoted_printable_decode($text);
+            } elseif (stripos($header, 'Content-Transfer-Encoding: base64') !== false) {
+                $text = (string)base64_decode($text);
+            }
+            $mails[] = [implode(',', $to), (string)$mail['subject'], $text];
         }
         return $mails;
     }

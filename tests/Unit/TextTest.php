@@ -101,13 +101,17 @@ final class TextTest extends PluginTestCase
     public function testOwnTextOfInvisibleCharactersOnlyIsNone(): void
     {
         foreach (["\u{200B}", '&#8203;', '&shy;', '&#8288;', '&#65279;', "\u{200C}\u{200D}", '&nbsp;&#8203;', "\u{3164}",
-            "\u{2800}", "\x01"] as $invisible) {
+            "\u{2800}", "\x01", "\u{034F}", '&#847;', "\u{FE0F}", '&#65039;', "\u{0301}", "\u{200B}\u{034F}\u{FE0F}"] as $invisible) {
             $html = '<img src="x.png" alt="foto">' . $invisible;
             self::assertNotSame('', Text::ownText($html), 'the trimming alone keeps it: ' . bin2hex($invisible));
             self::assertFalse(Text::hasOwnText($html), bin2hex($invisible));
         }
         self::assertTrue(Text::hasOwnText('zak&#8203;azane'));
         self::assertTrue(Text::hasOwnText('&#8203;a'));
+        // A mark keeps the character it combines with: real text stays text.
+        self::assertTrue(Text::hasOwnText('<img src="x.png" alt="foto">e' . "\u{0301}"));
+        self::assertTrue(Text::hasOwnText('<img src="x.png" alt="foto">e&#769;'));
+        self::assertTrue(Text::hasOwnText("\u{0301}e"));
         self::assertFalse(Text::hasOwnText("\xC3\x28"), 'not UTF-8');
     }
 

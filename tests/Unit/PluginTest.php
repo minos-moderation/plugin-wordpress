@@ -34,6 +34,14 @@ final class PluginTest extends PluginTestCase
         self::assertSame(2, $args);
     }
 
+    public function testTheModeratorsRecipientsAreCheckedAfterEveryOtherFilter(): void
+    {
+        // Shared rule A7: no later filter may put the comment's author back.
+        [$priority, $args] = self::registration('comment_moderation_recipients', 'filterModerationRecipients');
+        self::assertSame(PHP_INT_MAX, $priority);
+        self::assertSame(2, $args);
+    }
+
     public function testTheAdminScreensAreHookedOnlyInTheAdmin(): void
     {
         self::assertArrayNotHasKey('admin_menu', WpStub::$hooks);

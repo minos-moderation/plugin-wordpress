@@ -195,6 +195,21 @@ class Platform
     }
 
     /**
+     * A user's current e-mail address.
+     *
+     * Used only to keep the moderator's e-mail about a support cue from its commenter; it
+     * never leaves the site.
+     *
+     * @param int $userId The user id.
+     * @return string The address, or '' for no such user.
+     */
+    public function userEmail(int $userId): string
+    {
+        $user = get_userdata($userId);
+        return is_object($user) && isset($user->user_email) && is_string($user->user_email) ? $user->user_email : '';
+    }
+
+    /**
      * Whether the current user holds a capability.
      *
      * @param string $capability The capability.

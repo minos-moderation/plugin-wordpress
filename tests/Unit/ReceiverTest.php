@@ -494,6 +494,123 @@ final class ReceiverTest extends PluginTestCase
         self::assertSame('spam', $this->field($spam, 'comment_approved'));
     }
 
+    /**
+     * Shared rule A7: `wsparcie` is a signal for the moderators, never an automatic removal.
+     * Under "mark as spam" a blocked comment with the cue waits for a person in the
+     * moderation queue, and the moderator's e-mail names the cue; nothing goes to its author.
+     * Without the cue the setting applies as before.
+     */
+    public function testABlockedCommentWithTheSupportCueIsHeldNeverMarkedAsSpam(): void
+    {
+        $this->configure(['blocked_mode' => Settings::BLOCKED_SPAM]);
+        $support = $this->post('Komentarz testowy z sygnałem wsparcia do zablokowania.');
+        $plain = $this->post('Komentarz testowy bez sygnału do zablokowania.');
+
+        self::assertSame(200, $this->deliver(self::verdict($support, 'zablokowane',
+            ['kategorie' => ['samookaleczenie'], 'wsparcie' => true])));
+        self::assertSame(200, $this->deliver(self::verdict($plain, 'zablokowane', ['kategorie' => ['nekanie']])));
+
+        self::assertSame(['0', 'zablokowane', '1'], [$this->field($support, 'comment_approved'),
+            $this->field($support, Meta::STATUS), $this->field($support, Meta::SUPPORT)], 'held, the verdict and the cue recorded');
+        self::assertSame([], array_values(array_filter(WpStub::$statusChanges, static function (array $change) use ($support): bool {
+            return $change[0] === $support;
+        })), 'no status change: it stays in the queue it waited in');
+        self::assertSame('spam', $this->field($plain, 'comment_approved'), 'without the cue the setting applies');
+        self::assertSame([[$support]], array_column(self::events(Outcome::HOOK_NOTIFY), 'args'), 'the moderator is told');
+
+        do_action(Outcome::HOOK_NOTIFY, $support);
+
+        self::assertSame([['moderator', $support]], WpStub::$emails, 'one e-mail, to the moderator');
+        self::assertCount(1, WpStub::$moderationTexts);
+        self::assertStringContainsString(CommentsScreen::supportAdvice(), WpStub::$moderationTexts[0][1]);
+    }
+
+    /**
+     * Shared rule A7: the moderator's e-mail about a held comment names the support cue when
+     * the gateway set it, whatever the verdict, and only then.
+     */
+    public function testTheModeratorsEmailCarriesTheSupportCueOnlyWhenTheGatewaySetIt(): void
+    {
+        $this->configure();
+        // Held by WordPress's own rules: a safe verdict leaves it held, so the e-mail goes out.
+        $safe = $this->post('Bezpieczny komentarz testowy z sygnałem wsparcia.', 0);
+        $blocked = $this->post('Zablokowany komentarz testowy bez sygnału.');
+        $this->deliver(self::verdict($safe, 'bezpieczne', ['kategorie' => ['samookaleczenie'], 'wsparcie' => true]));
+        $this->deliver(self::verdict($blocked, 'zablokowane', ['kategorie' => ['nekanie']]));
+        self::assertSame(['0', '0'], [$this->field($safe, 'comment_approved'), $this->field($blocked, 'comment_approved')]);
+
+        do_action(Outcome::HOOK_NOTIFY, $safe);
+        do_action(Outcome::HOOK_NOTIFY, $blocked);
+
+        $texts = array_column(WpStub::$moderationTexts, 1, 0);
+        self::assertSame([$safe, $blocked], array_keys($texts), 'both e-mails went out');
+        self::assertStringContainsString(CommentsScreen::supportAdvice(), $texts[$safe]);
+        self::assertStringStartsWith("A new comment is waiting for your approval\r\n", $texts[$safe], 'appended, WordPress\'s text kept');
+        self::assertSame("A new comment is waiting for your approval\r\n", $texts[$blocked], 'no cue, no change');
+    }
+
+    /**
+     * Shared rule A7: a plugin never messages a comment's author about the support cue.
+     * WordPress sends the moderator's e-mail to the post's author too when they may edit the
+     * comment, so an author commenting on their own post would get it. Their address leaves
+     * the recipients, whatever its case, and so does their account's current one; the site's
+     * address keeps the e-mail with the cue. A comment under the site's own address leaves
+     * nobody to mail. Without the cue the recipients are WordPress's.
+     */
+    public function testTheModeratorsEmailWithTheSupportCueNeverGoesToTheCommentsAuthor(): void
+    {
+        $this->configure();
+        WpStub::$options['admin_email'] = 'admin@example.invalid';
+        WpStub::$postAuthorEmails[1] = 'autor.wpisu@example.invalid';
+        WpStub::$userEmails[7] = 'autor.wpisu@example.invalid';
+        $cue = ['kategorie' => ['samookaleczenie'], 'wsparcie' => true];
+        $own = $this->post('Komentarz testowy autora pod własnym wpisem.', 1,
+            ['comment_author_email' => 'Autor.Wpisu@Example.invalid', 'user_id' => 7]);
+        $moved = $this->post('Komentarz testowy autora sprzed zmiany adresu.', 1,
+            ['comment_author_email' => 'stary.adres@example.invalid', 'user_id' => 7]);
+        // Under a post whose author may not edit comments: the site's address is the only one.
+        $site = $this->post('Komentarz testowy pod adresem strony.', 1,
+            ['comment_author_email' => 'admin@example.invalid', 'comment_post_ID' => 2]);
+        $plain = $this->post('Komentarz testowy autora bez sygnału.', 1,
+            ['comment_author_email' => 'autor.wpisu@example.invalid', 'user_id' => 7]);
+        foreach ([$own, $moved, $site] as $id) {
+            $this->deliver(self::verdict($id, 'zablokowane', $cue));
+        }
+        $this->deliver(self::verdict($plain, 'zablokowane', ['kategorie' => ['nekanie']]));
+
+        foreach ([$own, $moved, $site, $plain] as $id) {
+            self::assertSame('0', $this->field($id, 'comment_approved'));
+            do_action(Outcome::HOOK_NOTIFY, $id);
+        }
+
+        $recipients = array_column(WpStub::$moderationRecipients, 1, 0);
+        $texts = array_column(WpStub::$moderationTexts, 1, 0);
+        self::assertSame(['admin@example.invalid'], $recipients[$own], 'never the comment\'s author');
+        self::assertSame(['admin@example.invalid'], $recipients[$moved], 'nor their account\'s current address');
+        self::assertArrayNotHasKey($site, $recipients, 'nobody else to mail: no e-mail');
+        self::assertStringContainsString(CommentsScreen::supportAdvice(), $texts[$own]);
+        self::assertSame(['admin@example.invalid', 'autor.wpisu@example.invalid'], $recipients[$plain],
+            'without the cue the recipients are WordPress\'s');
+        self::assertStringNotContainsString(CommentsScreen::supportAdvice(), $texts[$plain]);
+    }
+
+    /**
+     * Shared rule A7, failing closed: the cue goes only into an e-mail whose recipients the
+     * plugin checked for the comment's author, so a replaced `wp_notify_moderator` that
+     * skips `comment_moderation_recipients` sends WordPress's text without it.
+     */
+    public function testTheSupportCueGoesOnlyIntoAnEmailWhoseRecipientsWereChecked(): void
+    {
+        $this->configure();
+        $id = $this->post('Komentarz testowy z sygnałem wsparcia.');
+        $this->deliver(self::verdict($id, 'zablokowane', ['kategorie' => ['samookaleczenie'], 'wsparcie' => true]));
+
+        self::assertSame("Tekst\r\n", apply_filters('comment_moderation_text', "Tekst\r\n", $id), 'no recipients checked');
+
+        apply_filters('comment_moderation_recipients', ['admin@example.invalid'], $id);
+        self::assertStringContainsString(CommentsScreen::supportAdvice(), apply_filters('comment_moderation_text', "Tekst\r\n", $id));
+    }
+
     public function testAnUnassessedCommentFollowsTheFailureMode(): void
     {
         $this->configure(['failure_mode' => Settings::FAIL_OPEN]);

@@ -106,6 +106,23 @@ final class SubmissionTest extends PluginTestCase
         self::assertStringContainsString('foto', $text);
     }
 
+    /**
+     * Shared rule F7: a combining mark alone is no text, but on a base character it is part
+     * of text a reader sees. One letter with its accent beside an image is sent, with the
+     * image's `alt`, unchanged.
+     */
+    public function testALetterWithACombiningMarkBesideAnImageIsSent(): void
+    {
+        $this->configure();
+        $id = $this->post('e&#769; <img src="https://obrazek.example/a.png" alt="foto" />');
+
+        self::assertTrue($this->pending($id));
+        self::assertNull($this->field($id, Meta::ERROR));
+        $text = $this->sentBody()['elementy'][0]['tekst'];
+        self::assertStringContainsString("e\u{0301}", $text, 'the letter keeps its mark');
+        self::assertStringContainsString('foto', $text);
+    }
+
     public function testAnImagesAltIsSentBesideTheCommentsOwnText(): void
     {
         $this->configure();
@@ -593,7 +610,8 @@ final class SubmissionTest extends PluginTestCase
     {
         $cases = [];
         $invisible = ['a zero-width space' => '&#8203;', 'a soft hyphen' => '&shy;', 'a word joiner' => '&#8288;',
-            'a byte order mark' => '&#65279;', 'a Hangul filler' => '&#12644;'];
+            'a byte order mark' => '&#65279;', 'a Hangul filler' => '&#12644;',
+            'a lone combining grapheme joiner' => '&#847;', 'a lone variation selector' => "\u{FE0F}"];
         foreach ($invisible as $name => $character) {
             $cases["an image with alt and {$name}"] = ['<img src="https://obrazek.example/a.png" alt="ładny kot" />'
                 . $character, Settings::FAIL_CLOSED, '0'];

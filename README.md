@@ -64,6 +64,14 @@ różni się od zegara serwera o więcej niż 5 minut — oraz każde doręczeni
 sekret nie spełnia warunków formularza (16–256 widocznych znaków ASCII), np. wpisany ręcznie
 do bazy.
 
+W trybie konserwacji WordPressa (plik `.maintenance` w czasie aktualizacji, najwyżej
+10 minut) webhook odpowiada HTTP 503, a brama ponawia doręczenie werdyktu do chwili krótko
+przed upływem 15 minut od przyjęcia komentarza (przy domyślnych ustawieniach bramy ok.
+12 minut); werdykt niedoręczony w tym czasie przepada, a komentarz po czasie
+oczekiwania trafia do trybu „Gdy brak werdyktu”. Własna strona konserwacji
+(`wp-content/maintenance.php`) musi odpowiadać kodem 503 — inaczej brama uzna doręczenie
+za udane i werdykt przepadnie.
+
 ## Ustawienia
 
 | Ustawienie | Domyślnie | Znaczenie |
@@ -74,9 +82,9 @@ do bazy.
 | Sekret webhooka | — | Służy wyłącznie do sprawdzania podpisu werdyktów i nigdy nie jest wysyłany. Strona pokazuje tylko jego początek. |
 | Profil oceny | `forum_adult` | `forum_adult` — forum dla dorosłych; `forum_teen` — forum dla dzieci i młodzieży. Klucz musi mieć dostęp do wybranego profilu. |
 | Gdy brak werdyktu | fail-closed | Co zrobić z komentarzem bez werdyktu: **fail-open** — opublikować, **fail-closed** — zostawić do ręcznej moderacji. Patrz niżej. |
-| Czas oczekiwania na werdykt | 20 min (od 20 do 1440) | Po tym czasie komentarz bez werdyktu trafia do trybu „Gdy brak werdyktu”. Brama próbuje doręczyć werdykt przez 15 minut, stąd najmniej 20 minut. Werdykt, który nadejdzie później, jest stosowany do komentarza opublikowanego przy fail-open (patrz niżej). |
+| Czas oczekiwania na werdykt | 20 min (od 20 do 1440) | Po tym czasie komentarz bez werdyktu trafia do trybu „Gdy brak werdyktu”. Brama próbuje doręczyć werdykt do chwili krótko przed upływem 15 minut od przyjęcia komentarza (przy domyślnych ustawieniach bramy ok. 12 minut), stąd najmniej 20 minut. Werdykt, który nadejdzie później, jest stosowany do komentarza opublikowanego przy fail-open (patrz niżej). |
 | Komentarz ocenzurowany | opublikuj wersję zamaskowaną | Opublikować tekst z fragmentami zastąpionymi znakami `█` albo zostawić komentarz do ręcznej moderacji. Oryginał zostaje zachowany w danych komentarza. Komentarz dłuższy niż 3000 znaków, komentarz z formatowaniem lub odnośnikami i komentarz, którego wersja zamaskowana nie pasuje do wysłanego tekstu, zawsze zostaje do moderacji (z wersją zamaskowaną w kolumnie **Minos**). |
-| Komentarz zablokowany | zostaw do ręcznej moderacji | Zostawić do moderacji albo oznaczyć jako spam. |
+| Komentarz zablokowany | zostaw do ręcznej moderacji | Zostawić do moderacji albo oznaczyć jako spam. Komentarz z sygnałem wsparcia zawsze zostaje do moderacji (patrz „Sygnał wsparcia”). |
 | Pokazuj informację | włączona | Informacja pod formularzem komentarza (RODO), patrz niżej. |
 | Treść informacji | tekst domyślny | Zwykły tekst; puste pole oznacza tekst domyślny. |
 
@@ -88,8 +96,9 @@ do bazy.
    komentarza najwyżej o 10 sekund). Jeśli brama kazała właśnie poczekać, komentarz nie jest
    wysyłany od razu, tylko po przerwie, przez WP-Cron (patrz „Fail-open i fail-closed”).
 2. Brama przyjmuje komentarz (HTTP 202) i odsyła werdykt później na adres webhooka —
-   próbuje go doręczyć przez 15 minut. Ile to trwa na Twojej stronie, pokazuje sekcja
-   „Ostatnie 7 dni” w **Ustawienia → Minos** (patrz „Dziennik i błędy”).
+   próbuje go doręczyć do chwili krótko przed upływem 15 minut od przyjęcia komentarza
+   (przy domyślnych ustawieniach bramy ok. 12 minut). Ile to trwa na Twojej stronie,
+   pokazuje sekcja „Ostatnie 7 dni” w **Ustawienia → Minos** (patrz „Dziennik i błędy”).
 3. Wtyczka sprawdza podpis i stosuje werdykt:
    - **bezpieczne** — publikuje komentarz;
    - **ocenzurowane** — publikuje wersję z zamaskowanymi fragmentami albo zostawia
@@ -102,6 +111,7 @@ do bazy.
      jest publikowany zamiast wersji zamaskowanej, a wersję zamaskowaną komentarza
      wstrzymanego widać w kolumnie **Minos**;
    - **zablokowane** — zostawia do moderacji albo oznacza jako spam (ustawienie);
+     komentarz z sygnałem wsparcia zawsze zostaje do moderacji;
    - **nieocenione** — tryb „Gdy brak werdyktu”.
 4. Werdykt i kategorie (np. `wulgaryzmy`, `spam`) widać w kolumnie **Minos** na liście
    komentarzy.
@@ -124,7 +134,9 @@ Zasady, które obowiązują zawsze:
   (minął czas oczekiwania), a werdykt nadejdzie później, wtyczka go stosuje: „zablokowane”
   przenosi komentarz do moderacji, „ocenzurowane” działa zgodnie z ustawieniem. Nie robi
   tego, jeśli w międzyczasie ktoś zmienił status komentarza; edycję opisuje rozdział
-  „Edycja komentarza”.
+  „Edycja komentarza”. Komentarz z sygnałem wsparcia zostaje opublikowany (przy
+  ustawieniu „opublikuj wersję zamaskowaną” — w wersji zamaskowanej, jeśli ta pasuje),
+  a decyzję podejmuje moderator.
 - **Werdykt dotyczy tylko wysłanego tekstu.** Przed zastosowaniem każdego werdyktu wtyczka
   sprawdza, czy komentarz nadal ma tekst, który wysłała do oceny. Jeśli nie, werdykt nie
   jest stosowany, a komentarz zostaje wstrzymany i wysłany ponownie.
@@ -166,7 +178,8 @@ w czasie oczekiwania, gdy brama odrzuci komentarz z powodu błędu konfiguracji 
 klucz) albo gdy komentarz nie ma tekstu do oceny (np. sam odnośnik bez treści albo sam
 obrazek — także z opisem `alt` lub `title`, bo brama nie ocenia obrazów, a werdykt o samym
 opisie dotyczyłby czegoś, czego nie widziała; niewidoczne znaki, np. spacja o zerowej
-szerokości, nie są tekstem; taki komentarz nie jest wysyłany, a kolumna
+szerokości albo samotny znak łączący bez litery, do której mógłby się dołączyć, nie są
+tekstem (litera z akcentem nim jest); taki komentarz nie jest wysyłany, a kolumna
 **Minos** podaje powód „brak tekstu do oceny”). Wtedy:
 
 - **fail-closed** (domyślnie) — komentarz zostaje do ręcznej moderacji;
@@ -270,6 +283,20 @@ w kolumnie **Minos** i pokazuje powiadomienie na liście komentarzy. **Wtyczka n
 skontaktować się z autorem** (brama nie otrzymuje żadnych danych kontaktowych) — to Ty
 decydujesz, czy odpowiedzieć, np. z informacją o telefonie zaufania 116 123 (dorośli) lub
 116 111 (dzieci i młodzież).
+
+Komentarza z sygnałem wsparcia wtyczka nigdy sama nie usuwa, nie oznacza jako spam ani nie
+zdejmuje ze strony: zostaje wstrzymany albo opublikowany, dopóki nie zdecyduje człowiek.
+Werdykt „zablokowane” zostawia go do moderacji także przy ustawieniu „oznacz jako spam”,
+a spóźniony werdykt nie cofa publikacji przy fail-open. Wiadomość e-mail do moderatora
+o komentarzu czekającym na moderację zawiera wtedy informację o sygnale wsparcia. Komentarz
+opublikowany z sygnałem wsparcia nie wywołuje e-maila (WordPress powiadamia moderatorów
+tylko o komentarzach oczekujących) — widać go w kolumnie **Minos** i w powiadomieniu na
+liście komentarzy. Autor komentarza nie dostaje żadnej wiadomości o sygnale wsparcia:
+WordPress wysyła e-mail do moderatora także autorowi wpisu, więc wtyczka usuwa z odbiorców
+tego e-maila adres autora komentarza (adres podany przy komentarzu i obecny adres jego
+konta), np. gdy autor komentuje własny wpis. Jeśli po usunięciu nie zostaje nikt (np.
+komentarz administratora pod adresem e-mail strony), e-mail nie jest wysyłany wcale —
+świadomie: komentarz i tak czeka w kolejce moderacji z sygnałem w kolumnie **Minos**.
 
 ## Dziennik i błędy
 

@@ -233,7 +233,7 @@ final class SettingsPage
                 printf('<input type="number" class="small-text" id="%s" name="%s" value="%d" min="%d" max="%d" /> %s',
                     esc_attr($id), esc_attr($input), (int)$values['timeout_min'], Settings::MIN_TIMEOUT_MIN,
                     Settings::MAX_TIMEOUT_MIN, esc_html__('min', 'minos-moderation'));
-                self::help(__('Co najmniej i domyślnie 20 minut: brama próbuje dostarczyć werdykt przez 15 minut, do tego zapas. Jeśli przy fail-open komentarz zostanie opublikowany bez werdyktu, a werdykt nadejdzie później, wtyczka go zastosuje — chyba że ktoś w międzyczasie zmienił status komentarza. Zmiana tekstu takiego komentarza wstrzymuje go i wysyła do ponownej oceny.', 'minos-moderation'));
+                self::help(__('Co najmniej i domyślnie 20 minut: brama próbuje dostarczyć werdykt do chwili krótko przed upływem 15 minut od przyjęcia komentarza, do tego zapas. Jeśli przy fail-open komentarz zostanie opublikowany bez werdyktu, a werdykt nadejdzie później, wtyczka go zastosuje — chyba że ktoś w międzyczasie zmienił status komentarza. Zmiana tekstu takiego komentarza wstrzymuje go i wysyła do ponownej oceny.', 'minos-moderation'));
                 break;
             case 'censored_mode':
                 $this->radios($input, $values['censored_mode'], [
@@ -247,6 +247,7 @@ final class SettingsPage
                     Settings::HOLD         => __('zostaw do ręcznej moderacji', 'minos-moderation'),
                     Settings::BLOCKED_SPAM => __('oznacz jako spam', 'minos-moderation'),
                 ]);
+                self::help(__('Komentarz z sygnałem wsparcia (możliwe samookaleczenie) zawsze zostaje do ręcznej moderacji: wtyczka nigdy nie oznacza go jako spam, a opublikowanego nie zdejmuje ze strony także po spóźnionym werdykcie — decyduje moderator.', 'minos-moderation'));
                 break;
             case 'notice_text':
                 printf('<textarea class="large-text" rows="4" id="%s" name="%s" placeholder="%s">%s</textarea>',

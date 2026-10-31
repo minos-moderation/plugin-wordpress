@@ -549,6 +549,68 @@ final class ReceiverTest extends PluginTestCase
         self::assertSame("A new comment is waiting for your approval\r\n", $texts[$blocked], 'no cue, no change');
     }
 
+    /**
+     * Shared rule A7: a plugin never messages a comment's author about the support cue.
+     * WordPress sends the moderator's e-mail to the post's author too when they may edit the
+     * comment, so an author commenting on their own post would get it. Their address leaves
+     * the recipients, whatever its case, and so does their account's current one; the site's
+     * address keeps the e-mail with the cue. A comment under the site's own address leaves
+     * nobody to mail. Without the cue the recipients are WordPress's.
+     */
+    public function testTheModeratorsEmailWithTheSupportCueNeverGoesToTheCommentsAuthor(): void
+    {
+        $this->configure();
+        WpStub::$options['admin_email'] = 'admin@example.invalid';
+        WpStub::$postAuthorEmails[1] = 'autor.wpisu@example.invalid';
+        WpStub::$userEmails[7] = 'autor.wpisu@example.invalid';
+        $cue = ['kategorie' => ['samookaleczenie'], 'wsparcie' => true];
+        $own = $this->post('Komentarz testowy autora pod własnym wpisem.', 1,
+            ['comment_author_email' => 'Autor.Wpisu@Example.invalid', 'user_id' => 7]);
+        $moved = $this->post('Komentarz testowy autora sprzed zmiany adresu.', 1,
+            ['comment_author_email' => 'stary.adres@example.invalid', 'user_id' => 7]);
+        // Under a post whose author may not edit comments: the site's address is the only one.
+        $site = $this->post('Komentarz testowy pod adresem strony.', 1,
+            ['comment_author_email' => 'admin@example.invalid', 'comment_post_ID' => 2]);
+        $plain = $this->post('Komentarz testowy autora bez sygnału.', 1,
+            ['comment_author_email' => 'autor.wpisu@example.invalid', 'user_id' => 7]);
+        foreach ([$own, $moved, $site] as $id) {
+            $this->deliver(self::verdict($id, 'zablokowane', $cue));
+        }
+        $this->deliver(self::verdict($plain, 'zablokowane', ['kategorie' => ['nekanie']]));
+
+        foreach ([$own, $moved, $site, $plain] as $id) {
+            self::assertSame('0', $this->field($id, 'comment_approved'));
+            do_action(Outcome::HOOK_NOTIFY, $id);
+        }
+
+        $recipients = array_column(WpStub::$moderationRecipients, 1, 0);
+        $texts = array_column(WpStub::$moderationTexts, 1, 0);
+        self::assertSame(['admin@example.invalid'], $recipients[$own], 'never the comment\'s author');
+        self::assertSame(['admin@example.invalid'], $recipients[$moved], 'nor their account\'s current address');
+        self::assertArrayNotHasKey($site, $recipients, 'nobody else to mail: no e-mail');
+        self::assertStringContainsString(CommentsScreen::supportAdvice(), $texts[$own]);
+        self::assertSame(['admin@example.invalid', 'autor.wpisu@example.invalid'], $recipients[$plain],
+            'without the cue the recipients are WordPress\'s');
+        self::assertStringNotContainsString(CommentsScreen::supportAdvice(), $texts[$plain]);
+    }
+
+    /**
+     * Shared rule A7, failing closed: the cue goes only into an e-mail whose recipients the
+     * plugin checked for the comment's author, so a replaced `wp_notify_moderator` that
+     * skips `comment_moderation_recipients` sends WordPress's text without it.
+     */
+    public function testTheSupportCueGoesOnlyIntoAnEmailWhoseRecipientsWereChecked(): void
+    {
+        $this->configure();
+        $id = $this->post('Komentarz testowy z sygnałem wsparcia.');
+        $this->deliver(self::verdict($id, 'zablokowane', ['kategorie' => ['samookaleczenie'], 'wsparcie' => true]));
+
+        self::assertSame("Tekst\r\n", apply_filters('comment_moderation_text', "Tekst\r\n", $id), 'no recipients checked');
+
+        apply_filters('comment_moderation_recipients', ['admin@example.invalid'], $id);
+        self::assertStringContainsString(CommentsScreen::supportAdvice(), apply_filters('comment_moderation_text', "Tekst\r\n", $id));
+    }
+
     public function testAnUnassessedCommentFollowsTheFailureMode(): void
     {
         $this->configure(['failure_mode' => Settings::FAIL_OPEN]);

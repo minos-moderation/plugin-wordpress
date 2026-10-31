@@ -86,6 +86,35 @@ final class StatusAndMailTest extends IntegrationTestCase
             self::assertStringContainsString(CommentsScreen::supportAdvice(), $text);
         }
         self::assertContains(get_option('admin_email'), array_column($mails, 0));
+
+        // The post's author (an Author: may edit the comments on their post, may not
+        // moderate) comments on their own post, which WordPress mails them about.
+        add_filter('comment_flood_filter', '__return_false');
+        wp_set_current_user($this->authorId);
+        $own = $this->post('Komentarz testowy autora pod własnym wpisem.');
+        $control = $this->post('Drugi komentarz testowy autora, bez sygnału.');
+        wp_set_current_user(0);
+        self::assertSame([self::AUTHOR_EMAIL, self::AUTHOR_EMAIL],
+            [self::row($own)['comment_author_email'], self::row($control)['comment_author_email']]);
+        self::assertSame(200, $this->serveSigned(self::verdict($own, 'zablokowane',
+            ['kategorie' => ['samookaleczenie'], 'wsparcie' => true])));
+        // Held without the cue: an `ocenzurowane` with no masked text.
+        self::assertSame(200, $this->serveSigned(self::verdict($control, 'ocenzurowane')));
+        self::assertSame(['0', '0'], [self::row($own)['comment_approved'], self::row($control)['comment_approved']]);
+
+        reset_phpmailer_instance();
+        do_action(Outcome::HOOK_NOTIFY, $control);
+        self::assertContains(self::AUTHOR_EMAIL, array_column(self::mails(), 0),
+            'the guard: WordPress mails the post\'s author about a held comment on their post');
+
+        // Their account's address changed since the comment: WordPress mails the new one.
+        $changed = wp_update_user(['ID' => $this->authorId, 'user_email' => 'nowy.adres.autora@example.invalid']);
+        self::assertSame($this->authorId, $changed);
+        reset_phpmailer_instance();
+        do_action(Outcome::HOOK_NOTIFY, $own);
+        $mails = self::mails();
+        self::assertSame([get_option('admin_email')], array_column($mails, 0), 'never its author, who wrote the post');
+        self::assertStringContainsString(CommentsScreen::supportAdvice(), $mails[0][2]);
     }
 
     /**

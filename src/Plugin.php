@@ -105,7 +105,9 @@ final class Plugin
         add_action('comment_post', [$submission, 'onCommentPost'], self::SUBMIT_PRIORITY, 2);
         add_action('rest_insert_comment', [$submission, 'onRestInsertComment'], self::SUBMIT_PRIORITY, 3);
         add_filter('notify_moderator', [$this->outcome, 'filterNotifyModerator'], 10, 2);
-        // The support cue in the moderator's e-mail (shared rule A7).
+        // The support cue in the moderator's e-mail, never to the comment's author (shared
+        // rule A7): the recipients last, so no later filter puts the author back.
+        add_filter('comment_moderation_recipients', [$this->outcome, 'filterModerationRecipients'], PHP_INT_MAX, 2);
         add_filter('comment_moderation_text', [$this->outcome, 'filterModerationText'], 10, 2);
         // A person's status change after a fail-open publication stands; an edit of a
         // comment that was never assessed sends it again.

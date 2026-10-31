@@ -73,6 +73,15 @@ final class Outcome
     private $writing = false;
 
     /**
+     * The comments whose moderator's e-mail had the comment's author taken off its
+     * recipients in this request ({@see filterModerationRecipients}): only their e-mail
+     * carries the support cue ({@see filterModerationText}).
+     *
+     * @var array<int,bool>
+     */
+    private $authorNotRecipient = [];
+
+    /**
      * @param Platform $wp       The WordPress adapter.
      * @param Settings $settings The settings.
      * @param Log      $log      The administrator's log.
@@ -335,9 +344,52 @@ final class Outcome
     }
 
     /**
+     * `comment_moderation_recipients` filter, run last: the moderator's e-mail about a
+     * comment with the support cue never goes to the comment's author (shared rule A7: a
+     * plugin never messages its author about it). WordPress sends that e-mail to the site's
+     * administration address and to the post's author when they may edit the comment, so
+     * an author commenting on their own post, or an administrator commenting under the
+     * site's address, would get it. Their address (the comment's, and the current one of
+     * the commenter's account) leaves the list, compared without case; when nobody is left,
+     * nobody is mailed. Without the cue the list is WordPress's.
+     *
+     * @param mixed      $emails    The recipients so far.
+     * @param int|string $commentId The comment.
+     * @return mixed The recipients without the comment's author, or `$emails` unchanged.
+     */
+    public function filterModerationRecipients($emails, $commentId)
+    {
+        $id = (int)$commentId;
+        unset($this->authorNotRecipient[$id]);
+        try {
+            if (!is_array($emails) || $this->wp->meta($id, Meta::SUPPORT) !== '1') {
+                return $emails;
+            }
+            $comment = $this->wp->comment($id);
+            if ($comment === null) {
+                return $emails;
+            }
+            $author = [strtolower(trim((string)$comment->comment_author_email))];
+            if ((int)$comment->user_id > 0) {
+                $author[] = strtolower(trim($this->wp->userEmail((int)$comment->user_id)));
+            }
+            $kept = array_values(array_filter($emails, static function ($email) use ($author): bool {
+                return !is_string($email) || !in_array(strtolower(trim($email)), $author, true);
+            }));
+            $this->authorNotRecipient[$id] = true;
+            return $kept;
+        } catch (\Throwable $e) {
+            // Another plugin's hook: the list stays WordPress's, and the text gets no cue.
+            return $emails;
+        }
+    }
+
+    /**
      * `comment_moderation_text` filter: the moderator's "awaiting moderation" e-mail about a
      * comment with the support cue carries the cue and what the moderator can do about it
-     * (shared rule A7). Only the moderators get it; nothing goes to the comment's author.
+     * (shared rule A7), but only once {@see filterModerationRecipients} took the comment's
+     * author off its recipients in this request: an e-mail whose recipients nobody checked
+     * goes out as WordPress wrote it.
      *
      * @param mixed      $message   The e-mail's text so far.
      * @param int|string $commentId The comment.
@@ -345,8 +397,10 @@ final class Outcome
      */
     public function filterModerationText($message, $commentId)
     {
+        $id = (int)$commentId;
         try {
-            if (!is_string($message) || $this->wp->meta((int)$commentId, Meta::SUPPORT) !== '1') {
+            if (!is_string($message) || !isset($this->authorNotRecipient[$id])
+                || $this->wp->meta($id, Meta::SUPPORT) !== '1') {
                 return $message;
             }
             return $message . "\r\n" . __('Sygnał wsparcia:', 'minos-moderation') . ' '

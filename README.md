@@ -289,7 +289,12 @@ a spóźniony werdykt nie cofa publikacji przy fail-open. Wiadomość e-mail do 
 o komentarzu czekającym na moderację zawiera wtedy informację o sygnale wsparcia. Komentarz
 opublikowany z sygnałem wsparcia nie wywołuje e-maila (WordPress powiadamia moderatorów
 tylko o komentarzach oczekujących) — widać go w kolumnie **Minos** i w powiadomieniu na
-liście komentarzy. Autor komentarza nie dostaje od wtyczki żadnej wiadomości.
+liście komentarzy. Autor komentarza nie dostaje żadnej wiadomości o sygnale wsparcia:
+WordPress wysyła e-mail do moderatora także autorowi wpisu, więc wtyczka usuwa z odbiorców
+tego e-maila adres autora komentarza (adres podany przy komentarzu i obecny adres jego
+konta), np. gdy autor komentuje własny wpis. Jeśli po usunięciu nie zostaje nikt (np.
+komentarz administratora pod adresem e-mail strony), e-mail nie jest wysyłany wcale —
+świadomie: komentarz i tak czeka w kolejce moderacji z sygnałem w kolumnie **Minos**.
 
 ## Dziennik i błędy
 

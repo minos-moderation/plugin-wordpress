@@ -136,7 +136,14 @@ Decisions worth knowing before changing anything:
   waits in `_minos_masked`). The moderators see it in the "Minos" column, in the
   comments screen's notice (comments of the last 7 days) and, for a held comment, in the
   "awaiting moderation" e-mail (`comment_moderation_text`, `Outcome::filterModerationText`).
-  Nothing goes to the comment's author.
+  Nothing about it goes to the comment's author. WordPress mails that e-mail to the post's
+  author too when they may edit the comment, so `comment_moderation_recipients`
+  (`Outcome::filterModerationRecipients`, at `PHP_INT_MAX` so no later filter puts the
+  author back) takes the comment's address and its account's current one
+  (`get_userdata`) off the recipients, compared without case. When nobody is left (an
+  administrator commenting under the site's address), no e-mail goes out. The cue goes
+  only into an e-mail whose recipients that filter checked in the same request, so a
+  replaced `wp_notify_moderator` that skips the filter sends WordPress's text alone.
 - **Revisions.** A verdict is about the text that was sent. `Submission::onEdit`
   (`edit_comment`) sends a comment again as `wp:<ID>.<n>` (`_minos_revision`, absent = 0,
   fresh `_minos_held_at`) when its text changed while it waited for its verdict, or after
@@ -241,7 +248,7 @@ changed; approval mails the post's author), `transition_comment_status`,
 `wp_update_comment` (unslashes; returns `1`/`0`, or `false`/`WP_Error`; runs
 `pre_comment_content`, `comment_save_pre` and `wp_update_comment_data`, then
 `edit_comment`), wpdb refusing a value longer than its column (`text`: 65,535 bytes),
-`wp_slash`, `user_can`, `current_user_can`,
+`wp_slash`, `user_can`, `current_user_can`, `get_userdata` (false for no user),
 `get_option` / `update_option` / `add_option` (autoload `false`) / `delete_option`,
 `register_setting` (`type`, `sanitize_callback`, `default`), `add_options_page`,
 `add_settings_section`, `add_settings_field`, `add_settings_error`, `settings_fields`,
@@ -251,8 +258,11 @@ changed; approval mails the post's author), `transition_comment_status`,
 `update_option_{$option}` (old and new value, only on a change), `pre_http_request` and the
 `schedule_event` filter (run inside `wp_remote_post` / `wp_schedule_single_event`; another
 plugin's callback may throw there), `get_comments` with `meta_compare` / `meta_type`,
-`wp_new_comment_notify_moderator`, `comment_moderation_text` (the text and the comment id,
-in `wp_notify_moderator`; once per e-mail on 6.0, once per recipient on 7.1),
+`wp_new_comment_notify_moderator`, `comment_moderation_recipients` (the list and the
+comment id, in `wp_notify_moderator`: `admin_email`, and the post's author when they may
+`edit_comment` and have another address; before the text), `comment_moderation_text` (the
+text and the comment id, in `wp_notify_moderator`; once per e-mail on 6.0, once per
+recipient on 7.1),
 `wp_new_comment_notify_postauthor`,
 `load_plugin_textdomain`, `register_activation_hook`, `register_deactivation_hook`,
 `WP_UNINSTALL_PLUGIN`.

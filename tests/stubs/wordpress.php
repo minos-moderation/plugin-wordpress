@@ -74,6 +74,18 @@ final class WpStub
      */
     public static $moderationTexts = [];
 
+    /**
+     * @var array<int,array{0:int,1:array<int,string>}> The recipients of each moderator's
+     *     e-mail, after the `comment_moderation_recipients` filter: comment id, addresses.
+     */
+    public static $moderationRecipients = [];
+
+    /** @var array<int,string> Post id → the e-mail of its author, who may edit its comments. */
+    public static $postAuthorEmails = [];
+
+    /** @var array<int,string> User id → e-mail address (`get_userdata`). */
+    public static $userEmails = [];
+
     /** @var array<string,array<int,array{0:callable,1:int,2:int}>> Hook → callbacks. */
     public static $hooks = [];
 
@@ -130,6 +142,9 @@ final class WpStub
         self::$statusChanges = [];
         self::$emails = [];
         self::$moderationTexts = [];
+        self::$moderationRecipients = [];
+        self::$postAuthorEmails = [];
+        self::$userEmails = [];
         self::$hooks = [];
         self::$routes = [];
         self::$settingsErrors = [];
@@ -575,17 +590,34 @@ function wpstub_transition_comment_status(string $new, string $old, int $id): vo
 }
 
 /**
- * Core sends only for a held comment, and `wp_notify_moderator` runs the e-mail's text
- * through `comment_moderation_text` (the text and the comment id) before mailing it.
+ * As core: only for a held comment (`notify_moderator` on that), then what
+ * `wp_notify_moderator` does: `notify_moderator` again on the `moderation_notify` option;
+ * the recipients (the `admin_email` option, and the post's author when they may edit the
+ * comment and have another address) through `comment_moderation_recipients`; the text
+ * through `comment_moderation_text`; one e-mail per recipient, none when nobody is left.
+ * Recorded once per comment that went to anyone, in `$emails`, `$moderationRecipients`
+ * and `$moderationTexts`.
  */
 function wp_new_comment_notify_moderator($id)
 {
     $comment = get_comment($id);
-    if ($comment !== null && $comment->comment_approved === '0'
-        && apply_filters('notify_moderator', true, $id)) {
+    if ($comment === null || !apply_filters('notify_moderator', $comment->comment_approved === '0', $id)) {
+        return false;
+    }
+    if (!apply_filters('notify_moderator', get_option('moderation_notify', '1'), $id)) {
+        return true;
+    }
+    $emails = [(string)get_option('admin_email', 'admin@example.invalid')];
+    $postAuthor = WpStub::$postAuthorEmails[(int)$comment->comment_post_ID] ?? '';
+    if ($postAuthor !== '' && strcasecmp($postAuthor, $emails[0]) !== 0) {
+        $emails[] = $postAuthor;
+    }
+    $emails = apply_filters('comment_moderation_recipients', $emails, (int)$id);
+    $text = apply_filters('comment_moderation_text', "A new comment is waiting for your approval\r\n", (int)$id);
+    if (is_array($emails) && $emails !== []) {
         WpStub::$emails[] = ['moderator', (int)$id];
-        $text = "A new comment is waiting for your approval\r\n";
-        WpStub::$moderationTexts[] = [(int)$id, (string)apply_filters('comment_moderation_text', $text, (int)$id)];
+        WpStub::$moderationRecipients[] = [(int)$id, array_values($emails)];
+        WpStub::$moderationTexts[] = [(int)$id, (string)$text];
     }
     return true;
 }
@@ -614,6 +646,16 @@ function wp_unslash($value)
 function user_can($user, $capability, ...$args)
 {
     return in_array($capability, WpStub::$userCaps[(int)$user] ?? [], true);
+}
+
+/** A user with an address in `WpStub::$userEmails`, or false as core answers for no user. */
+function get_userdata($userId)
+{
+    $id = (int)$userId;
+    if (!isset(WpStub::$userEmails[$id])) {
+        return false;
+    }
+    return (object)['ID' => $id, 'user_email' => WpStub::$userEmails[$id]];
 }
 
 function current_user_can($capability, ...$args)

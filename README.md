@@ -65,8 +65,9 @@ sekret nie spełnia warunków formularza (16–256 widocznych znaków ASCII), np
 do bazy.
 
 W trybie konserwacji WordPressa (plik `.maintenance` w czasie aktualizacji, najwyżej
-10 minut) webhook odpowiada HTTP 503, a brama ponawia doręczenie werdyktu do ok. 12 minut
-od przyjęcia komentarza; werdykt niedoręczony w tym czasie przepada, a komentarz po czasie
+10 minut) webhook odpowiada HTTP 503, a brama ponawia doręczenie werdyktu do chwili krótko
+przed upływem 15 minut od przyjęcia komentarza (przy domyślnych ustawieniach bramy ok.
+12 minut); werdykt niedoręczony w tym czasie przepada, a komentarz po czasie
 oczekiwania trafia do trybu „Gdy brak werdyktu”. Własna strona konserwacji
 (`wp-content/maintenance.php`) musi odpowiadać kodem 503 — inaczej brama uzna doręczenie
 za udane i werdykt przepadnie.
@@ -81,7 +82,7 @@ za udane i werdykt przepadnie.
 | Sekret webhooka | — | Służy wyłącznie do sprawdzania podpisu werdyktów i nigdy nie jest wysyłany. Strona pokazuje tylko jego początek. |
 | Profil oceny | `forum_adult` | `forum_adult` — forum dla dorosłych; `forum_teen` — forum dla dzieci i młodzieży. Klucz musi mieć dostęp do wybranego profilu. |
 | Gdy brak werdyktu | fail-closed | Co zrobić z komentarzem bez werdyktu: **fail-open** — opublikować, **fail-closed** — zostawić do ręcznej moderacji. Patrz niżej. |
-| Czas oczekiwania na werdykt | 20 min (od 20 do 1440) | Po tym czasie komentarz bez werdyktu trafia do trybu „Gdy brak werdyktu”. Brama próbuje doręczyć werdykt przez 15 minut, stąd najmniej 20 minut. Werdykt, który nadejdzie później, jest stosowany do komentarza opublikowanego przy fail-open (patrz niżej). |
+| Czas oczekiwania na werdykt | 20 min (od 20 do 1440) | Po tym czasie komentarz bez werdyktu trafia do trybu „Gdy brak werdyktu”. Brama próbuje doręczyć werdykt do chwili krótko przed upływem 15 minut od przyjęcia komentarza (przy domyślnych ustawieniach bramy ok. 12 minut), stąd najmniej 20 minut. Werdykt, który nadejdzie później, jest stosowany do komentarza opublikowanego przy fail-open (patrz niżej). |
 | Komentarz ocenzurowany | opublikuj wersję zamaskowaną | Opublikować tekst z fragmentami zastąpionymi znakami `█` albo zostawić komentarz do ręcznej moderacji. Oryginał zostaje zachowany w danych komentarza. Komentarz dłuższy niż 3000 znaków, komentarz z formatowaniem lub odnośnikami i komentarz, którego wersja zamaskowana nie pasuje do wysłanego tekstu, zawsze zostaje do moderacji (z wersją zamaskowaną w kolumnie **Minos**). |
 | Komentarz zablokowany | zostaw do ręcznej moderacji | Zostawić do moderacji albo oznaczyć jako spam. Komentarz z sygnałem wsparcia zawsze zostaje do moderacji (patrz „Sygnał wsparcia”). |
 | Pokazuj informację | włączona | Informacja pod formularzem komentarza (RODO), patrz niżej. |
@@ -95,8 +96,9 @@ za udane i werdykt przepadnie.
    komentarza najwyżej o 10 sekund). Jeśli brama kazała właśnie poczekać, komentarz nie jest
    wysyłany od razu, tylko po przerwie, przez WP-Cron (patrz „Fail-open i fail-closed”).
 2. Brama przyjmuje komentarz (HTTP 202) i odsyła werdykt później na adres webhooka —
-   próbuje go doręczyć przez 15 minut. Ile to trwa na Twojej stronie, pokazuje sekcja
-   „Ostatnie 7 dni” w **Ustawienia → Minos** (patrz „Dziennik i błędy”).
+   próbuje go doręczyć do chwili krótko przed upływem 15 minut od przyjęcia komentarza
+   (przy domyślnych ustawieniach bramy ok. 12 minut). Ile to trwa na Twojej stronie,
+   pokazuje sekcja „Ostatnie 7 dni” w **Ustawienia → Minos** (patrz „Dziennik i błędy”).
 3. Wtyczka sprawdza podpis i stosuje werdykt:
    - **bezpieczne** — publikuje komentarz;
    - **ocenzurowane** — publikuje wersję z zamaskowanymi fragmentami albo zostawia

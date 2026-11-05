@@ -108,13 +108,50 @@ final class StatusAndMailTest extends IntegrationTestCase
             'the guard: WordPress mails the post\'s author about a held comment on their post');
 
         // Their account's address changed since the comment: WordPress mails the new one.
-        $changed = wp_update_user(['ID' => $this->authorId, 'user_email' => 'nowy.adres.autora@example.invalid']);
+        // In other letter case than WordPress compares it in: the address is the same one.
+        $changed = wp_update_user(['ID' => $this->authorId, 'user_email' => 'Nowy.Adres.Autora@example.invalid']);
         self::assertSame($this->authorId, $changed);
+        self::assertSame('Nowy.Adres.Autora@example.invalid', get_userdata($this->authorId)->user_email, 'stored as written');
         reset_phpmailer_instance();
         do_action(Outcome::HOOK_NOTIFY, $own);
         $mails = self::mails();
         self::assertSame([get_option('admin_email')], array_column($mails, 0), 'never its author, who wrote the post');
         self::assertStringContainsString(CommentsScreen::supportAdvice(), $mails[0][2]);
+    }
+
+    /**
+     * Shared rule A7, the case where nobody is left: a guest who types the site's address
+     * (in other letter case) as their own, under a post by the administrator, whom
+     * WordPress mails at that address only. The address leaves the recipients, so no
+     * e-mail goes out; the comment stays held with the cue for the comments screen.
+     */
+    public function testAGuestTypingTheSitesAddressTakesItOffTheModeratorsEmail(): void
+    {
+        $this->startGateway();
+        $site = (string)get_option('admin_email');
+        $typed = strtoupper($site);
+        self::assertNotSame($site, $typed, 'the guard: another letter case');
+        self::assertSame(0, strcasecmp(get_userdata(1)->user_email, $site), 'the guard: the administrator\'s own address');
+        $post = self::factory()->post->create(['post_author' => 1, 'comment_status' => 'open']);
+        add_filter('comment_flood_filter', '__return_false');
+        $support = $this->post('Komentarz testowy gościa z adresem strony.', ['comment_post_ID' => $post, 'email' => $typed]);
+        $control = $this->post('Drugi komentarz testowy gościa, bez sygnału.', ['comment_post_ID' => $post, 'email' => $typed]);
+        self::assertSame($typed, self::row($support)['comment_author_email'], 'stored as typed');
+
+        self::assertSame(200, $this->serveSigned(self::verdict($support, 'zablokowane',
+            ['kategorie' => ['samookaleczenie'], 'wsparcie' => true])));
+        // Held without the cue: an `ocenzurowane` with no masked text.
+        self::assertSame(200, $this->serveSigned(self::verdict($control, 'ocenzurowane')));
+
+        reset_phpmailer_instance();
+        do_action(Outcome::HOOK_NOTIFY, $control);
+        self::assertSame([$site], array_column(self::mails(), 0), 'the guard: WordPress mails the site\'s address');
+
+        reset_phpmailer_instance();
+        do_action(Outcome::HOOK_NOTIFY, $support);
+        self::assertSame([], self::mails(), 'nobody is left, so nobody is mailed');
+        self::assertSame(['0', 'zablokowane', '1'], [self::row($support)['comment_approved'],
+            self::stored($support, Meta::STATUS), self::stored($support, Meta::SUPPORT)], 'held, with the cue');
     }
 
     /**

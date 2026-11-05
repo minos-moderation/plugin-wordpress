@@ -123,6 +123,20 @@ final class SubmissionTest extends PluginTestCase
         self::assertStringContainsString('foto', $text);
     }
 
+    /**
+     * Shared rule F7: a letter with its combining mark is text a reader sees, with nothing
+     * beside it too, and is sent as it is.
+     */
+    public function testALetterWithACombiningMarkAloneIsSent(): void
+    {
+        $this->configure();
+        $id = $this->post("Za\u{0301}");
+
+        self::assertTrue($this->pending($id));
+        self::assertNull($this->field($id, Meta::ERROR));
+        self::assertSame("Za\u{0301}", $this->sentBody()['elementy'][0]['tekst']);
+    }
+
     public function testAnImagesAltIsSentBesideTheCommentsOwnText(): void
     {
         $this->configure();
@@ -597,6 +611,10 @@ final class SubmissionTest extends PluginTestCase
             'an image with alt, fail-open'          => [$described, Settings::FAIL_OPEN, '1'],
             'an image with alt and title'           => [$titled, Settings::FAIL_CLOSED, '0'],
             'a blank link with a title'             => [$blankLink, Settings::FAIL_CLOSED, '0'],
+            // Shared rule F7: a mark with nothing to combine with is no text, on its own too.
+            'a lone combining grapheme joiner'      => ["\u{034F}", Settings::FAIL_CLOSED, '0'],
+            'a lone variation selector, fail-open'  => ['&#65039;', Settings::FAIL_OPEN, '1'],
+            'lone marks between spaces'             => [" \u{FE0F} \u{034F}\u{0301} ", Settings::FAIL_CLOSED, '0'],
         ] + self::invisibleOnly();
     }
 

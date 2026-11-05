@@ -115,4 +115,24 @@ final class ContentTest extends IntegrationTestCase
         self::assertSame(['0', Meta::UNASSESSED, Meta::ERROR_NO_TEXT],
             [self::row($id)['comment_approved'], self::stored($id, Meta::STATUS), self::stored($id, Meta::ERROR)]);
     }
+
+    /**
+     * Shared rule F7 on the real comment form: a lone combining mark is no text to assess,
+     * and a letter with its combining mark is text, sent as it is.
+     */
+    public function testALoneMarkIsNoTextAndALetterWithItsMarkIsSent(): void
+    {
+        $this->startGateway();
+        $joiner = $this->post('&#847;');
+        $selector = $this->post("\u{FE0F}");
+        $letter = $this->post('Za&#769;');
+
+        foreach ([$joiner, $selector] as $id) {
+            self::assertSame(['0', Meta::UNASSESSED, Meta::ERROR_NO_TEXT],
+                [self::row($id)['comment_approved'], self::stored($id, Meta::STATUS), self::stored($id, Meta::ERROR)]);
+        }
+        self::assertCount(1, $this->sent, 'one request, for the letter');
+        self::assertSame("Za\u{0301}", $this->sent[0]['elementy'][0]['tekst']);
+        self::assertSame(Meta::PENDING, self::stored($letter, Meta::STATUS));
+    }
 }

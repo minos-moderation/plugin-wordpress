@@ -136,6 +136,64 @@ final class StatusAndMailTest extends IntegrationTestCase
             self::stored($id, Meta::STATUS), self::stored($id, Meta::SUPPORT), self::stored($id, Meta::AUTO_PUBLISHED)]);
     }
 
+    /**
+     * Shared rule A7 on the real WordPress, with the mock's own deliveries: after the
+     * timeout held three comments, a moderator approves two of them; then the gateway's
+     * late verdicts come, one of them with `wsparcie` and delivered twice. The approved
+     * comment with the cue stays published and carries the cue once, with its note; the
+     * one without the cue gets nothing; the held one with the cue stays held, and its
+     * moderator's e-mail names the cue and the note.
+     */
+    public function testALateSupportCueAfterAModeratorsApprovalIsASignalOnceAndChangesNoStatus(): void
+    {
+        $this->startGateway(['failure_mode' => Settings::FAIL_CLOSED, 'blocked_mode' => Settings::BLOCKED_SPAM]);
+        $approved = $this->post('Komentarz testowy [minos:blokuj] [minos:kategoria=samookaleczenie] [minos:dwa-razy]');
+        $plain = $this->post('Komentarz testowy [minos:blokuj] [minos:kategoria=nekanie]');
+        $held = $this->post('Komentarz testowy [minos:kategoria=samookaleczenie]');
+        foreach ([$approved, $plain, $held] as $id) {
+            self::age($id, 21 * 60);
+        }
+        do_action(Sweeper::HOOK);
+        foreach ([$approved, $plain, $held] as $id) {
+            self::assertSame(['0', Meta::UNASSESSED], [self::row($id)['comment_approved'], self::stored($id, Meta::STATUS)]);
+        }
+        self::assertTrue(wp_set_comment_status($approved, 'approve'));
+        self::assertTrue(wp_set_comment_status($plain, 'approve'));
+        wp_unschedule_hook(Outcome::HOOK_NOTIFY); // WP-Cron sent the timeout's e-mails
+        reset_phpmailer_instance();
+
+        $this->runMockWorker();
+        $this->runMockWorker();
+        $deliveries = $this->deliveries();
+        self::assertCount(4, $deliveries, 'the mock delivers the first verdict twice');
+        foreach ($deliveries as $delivery) {
+            self::assertSame(200, $this->serveDelivery($delivery));
+        }
+
+        self::assertSame(['1', Meta::UNASSESSED, null, '1', '1'], [self::row($approved)['comment_approved'],
+            self::stored($approved, Meta::STATUS), self::stored($approved, Meta::CATEGORIES),
+            self::stored($approved, Meta::SUPPORT), self::stored($approved, Meta::SUPPORT_AFTER_DECISION)],
+            'published as the moderator decided; only the cue is recorded');
+        self::assertCount(1, get_comment_meta($approved, Meta::SUPPORT), 'once, though delivered twice');
+        self::assertSame(['1', null, null], [self::row($plain)['comment_approved'], self::stored($plain, Meta::SUPPORT),
+            self::stored($plain, Meta::SUPPORT_AFTER_DECISION)], 'without wsparcie no signal');
+        self::assertSame(['0', Meta::UNASSESSED, '1'], [self::row($held)['comment_approved'], self::stored($held, Meta::STATUS),
+            self::stored($held, Meta::SUPPORT)], 'a late safe verdict publishes nothing');
+        self::assertSame([[$held]], array_column(self::events(Outcome::HOOK_NOTIFY), 'args'),
+            'an e-mail only about the comment that is held');
+        self::assertSame([], self::mails(), 'the webhook answers without sending e-mail');
+
+        do_action(Outcome::HOOK_NOTIFY, $held);
+
+        $mails = self::mails();
+        self::assertNotSame([], $mails);
+        foreach ($mails as [$to, , $text]) {
+            self::assertStringNotContainsString(self::row($held)['comment_author_email'], $to, 'never its author');
+            self::assertStringContainsString(CommentsScreen::supportAdvice(), $text);
+            self::assertStringContainsString(CommentsScreen::supportAfterDecisionNote(), $text);
+        }
+    }
+
     public function testAPersonsDecisionAfterAFailOpenPublicationStandsAgainstALateVerdict(): void
     {
         $this->startGateway(['failure_mode' => Settings::FAIL_OPEN]);

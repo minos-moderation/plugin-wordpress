@@ -62,6 +62,14 @@ final class Meta
      */
     public const SUPPORT = '_minos_wsparcie';
 
+    /**
+     * `1` when the support cue came with a verdict the plugin no longer applied: a person
+     * had decided on the comment, its text had changed since it was sent, or the failure
+     * mode had settled it (shared rule A7: the cue is a signal whatever happened, and the
+     * comment's status stays as it was). Shown with the cue in the "Minos" column.
+     */
+    public const SUPPORT_AFTER_DECISION = '_minos_wsparcie_po_decyzji';
+
     /** The gateway's category labels, comma separated. */
     public const CATEGORIES = '_minos_categories';
 
@@ -107,8 +115,8 @@ final class Meta
     /** Every key above: what `uninstall.php` deletes. */
     public const ALL = [
         self::STATUS, self::WAITING, self::HELD_AT, self::REVISION, self::SUBMITTED_AT, self::WP_APPROVED, self::RETRY_AT,
-        self::ATTEMPTS, self::ORIGINAL, self::MASKED, self::SUPPORT, self::CATEGORIES, self::ERROR,
-        self::SENT_CHARS, self::SENT_HASH, self::CUT, self::AUTO_PUBLISHED, self::TIMED_OUT,
+        self::ATTEMPTS, self::ORIGINAL, self::MASKED, self::SUPPORT, self::SUPPORT_AFTER_DECISION, self::CATEGORIES,
+        self::ERROR, self::SENT_CHARS, self::SENT_HASH, self::CUT, self::AUTO_PUBLISHED, self::TIMED_OUT,
         self::DECIDED_AT,
     ];
 

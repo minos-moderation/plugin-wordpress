@@ -122,7 +122,8 @@ Decisions worth knowing before changing anything:
   records WordPress's decision; publishing (a verdict or fail-open) approves only when it
   is `1`.
 - **A person's decision stands.** A comment that is no longer held when the verdict comes
-  keeps its status; only the verdict is recorded.
+  keeps its status; only the verdict is recorded, and its `wsparcie` as the support cue
+  noted as one after the decision (below).
 - **Late verdicts.** Under fail-open the timeout publishes and sets
   `_minos_auto_published`; a verdict arriving later is applied (`zablokowane` → hold,
   `ocenzurowane` → per setting), except that a comment with `wsparcie` stays published
@@ -144,6 +145,19 @@ Decisions worth knowing before changing anything:
   administrator commenting under the site's address), no e-mail goes out. The cue goes
   only into an e-mail whose recipients that filter checked in the same request, so a
   replaced `wp_notify_moderator` that skips the filter sends WordPress's text alone.
+  The cue is a signal whatever happened to the comment (the owner's decision of
+  2026-11-01): a verdict the plugin no longer applies — a person decided (approved, held,
+  spammed, trashed or edited the comment), its text changed since it was sent (an older
+  revision, a write without `edit_comment`), or the failure mode settled it after the
+  timeout — still records its `wsparcie` (`Outcome::supportAfterDecision`, from
+  `Receiver::handle`): `_minos_wsparcie` and `_minos_wsparcie_po_decyzji` = `1`, the note
+  "after the moderator's decision" in the column and the e-mail, and for a comment that is
+  held and no longer waits the moderator's e-mail from WP-Cron. Nothing else of that
+  verdict applies (status, content, categories). Once only: a comment that already carries
+  the cue gets nothing more, so a repeated delivery adds no second e-mail; the cue is
+  written last, so a hook that throws first answers `500` and the redelivery records it.
+  A comment that carries the cue from an earlier revision's verdict is treated as one with
+  the cue by every later verdict (never spam, never unpublished).
 - **Revisions.** A verdict is about the text that was sent. `Submission::onEdit`
   (`edit_comment`) sends a comment again as `wp:<ID>.<n>` (`_minos_revision`, absent = 0,
   fresh `_minos_held_at`) when its text changed while it waited for its verdict, or after

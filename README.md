@@ -129,7 +129,8 @@ Zasady, które obowiązują zawsze:
   dyskusji wymagają ręcznego zatwierdzania, komentarz zostaje w moderacji także po
   werdykcie „bezpieczne” — Minos dodaje kontrolę, nigdy jej nie usuwa.
 - **Decyzja człowieka wygrywa.** Jeśli moderator zatwierdził, usunął albo oznaczył
-  komentarz jako spam, zanim przyszedł werdykt, wtyczka tylko zapisuje werdykt.
+  komentarz jako spam, zanim przyszedł werdykt, wtyczka tylko zapisuje werdykt. Sygnał
+  wsparcia działa także wtedy (patrz „Sygnał wsparcia”).
 - **Spóźniony werdykt.** Jeśli przy fail-open komentarz został opublikowany bez werdyktu
   (minął czas oczekiwania), a werdykt nadejdzie później, wtyczka go stosuje: „zablokowane”
   przenosi komentarz do moderacji, „ocenzurowane” działa zgodnie z ustawieniem. Nie robi
@@ -297,6 +298,15 @@ tego e-maila adres autora komentarza (adres podany przy komentarzu i obecny adre
 konta), np. gdy autor komentuje własny wpis. Jeśli po usunięciu nie zostaje nikt (np.
 komentarz administratora pod adresem e-mail strony), e-mail nie jest wysyłany wcale —
 świadomie: komentarz i tak czeka w kolejce moderacji z sygnałem w kolumnie **Minos**.
+
+Sygnał wsparcia działa zawsze, także w werdykcie, którego wtyczka już nie stosuje: gdy
+przychodzi po decyzji moderatora (komentarz zatwierdzony, wstrzymany, oznaczony jako spam,
+przeniesiony do kosza albo zmieniony), po zmianie treści komentarza albo po upływie czasu
+oczekiwania. Taki werdykt nie zmienia statusu ani treści komentarza i nie zapisuje
+kategorii — wtyczka zapisuje tylko sygnał wsparcia z dopiskiem, że nadszedł po decyzji
+moderatora, widoczny w kolumnie **Minos** i w powiadomieniu na liście komentarzy.
+O komentarzu, który nadal jest wstrzymany, moderator dostaje też e-mail z informacją
+o sygnale. Powtórzone doręczenie tego samego werdyktu niczego nie dubluje.
 
 ## Dziennik i błędy
 

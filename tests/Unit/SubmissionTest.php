@@ -84,6 +84,31 @@ final class SubmissionTest extends PluginTestCase
         self::assertArrayNotHasKey('link_domains', $this->sentBody()['elementy'][0]['meta']);
     }
 
+    /**
+     * Shared rules F7 and S2: an image's address is not a link the reader sees, nor is a
+     * quote's `cite`; a link's target and a bare address are, also around an image.
+     */
+    public function testAnImagesAddressIsNotALink(): void
+    {
+        $this->configure();
+        $this->post('Zobacz <img src="https://obrazek.example/a.png" srcset="https://cdn.example/a2.png 2x" alt="foto" />'
+            . ' i <a href="https://sklep.example/x"><img src="https://grafika.example/b.png" alt="baner" /></a>'
+            . ' oraz https://goly.example/ <blockquote cite="https://cytat.example/">Cytat testowy</blockquote>');
+
+        $item = $this->sentBody()['elementy'][0];
+        self::assertSame(['links' => 2, 'link_domains' => ['sklep.example', 'goly.example'], 'author_first_post' => true],
+            $item['meta']);
+        foreach (['obrazek.example', 'cdn.example', 'grafika.example', 'cytat.example'] as $hidden) {
+            self::assertStringNotContainsString($hidden, $item['tekst']);
+        }
+        self::assertStringContainsString('https://goly.example/', $item['tekst'], 'a bare address is text');
+
+        $this->post('<img src="https://obrazek.example/c.png" alt="opis" /> Sam obrazek i tekst.');
+        $meta = $this->sentBody()['elementy'][0]['meta'];
+        self::assertSame(0, $meta['links']);
+        self::assertArrayNotHasKey('link_domains', $meta);
+    }
+
     public function testTheTextOfTitleAndAltAttributesIsAssessed(): void
     {
         $this->configure();

@@ -135,4 +135,27 @@ final class ContentTest extends IntegrationTestCase
         self::assertSame("Za\u{0301}", $this->sent[0]['elementy'][0]['tekst']);
         self::assertSame(Meta::PENDING, self::stored($letter, Meta::STATUS));
     }
+
+    /**
+     * Shared rules F7 and S2 on the real kses of a site that lets visitors post images:
+     * the image's address kses keeps is not a link; the link around it is.
+     */
+    public function testAnImagesAddressIsNotSentAsALink(): void
+    {
+        $this->startGateway();
+        add_filter('wp_kses_allowed_html', static function ($tags, $context) {
+            if ($context === 'pre_comment_content' && is_array($tags)) {
+                $tags['img'] = ['src' => true, 'alt' => true, 'title' => true];
+            }
+            return $tags;
+        }, 10, 2);
+
+        $id = $this->post('Zobacz <a href="https://sklep.example/x"><img src="https://obrazek.example/a.png" alt="baner" /></a> testowy.');
+
+        self::assertStringContainsString('src="https://obrazek.example/a.png"', self::row($id)['comment_content'], 'kses kept the image');
+        $item = $this->sent[0]['elementy'][0];
+        self::assertSame(1, $item['meta']['links']);
+        self::assertSame(['sklep.example'], $item['meta']['link_domains']);
+        self::assertStringNotContainsString('obrazek.example', $item['tekst']);
+    }
 }

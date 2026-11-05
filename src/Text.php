@@ -66,8 +66,16 @@ final class Text
     /** A `title` or `alt` attribute inside a tag, quoted or not. */
     private const TEXT_ATTRIBUTE = '/[\s"\'](?:title|alt)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s"\'=<>`]+))/i';
 
-    /** A link, in the markup or in the text. */
+    /** A link, in a link's `href` or in the text. */
     private const LINK = '#https?://[^\s"\'<>]+#i';
+
+    /**
+     * The attributes of a tag whose value counts for the links (shared rules F7, S2): a
+     * link's `href`, and the `title` and `alt` text a reader sees, which is sent too. Not
+     * an image's `src` or `srcset`, nor a quote's `cite`: an address the reader never sees
+     * as a link is not one.
+     */
+    private const LINK_ATTRIBUTE = '/[\s"\'](?:href|title|alt)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s"\'=<>`]+))/i';
 
     /**
      * Second-level labels that are public suffixes under a country code (`co.uk`,
@@ -247,7 +255,8 @@ final class Text
     }
 
     /**
-     * How many distinct `http(s)` links a comment carries, in its markup or its text.
+     * How many distinct `http(s)` links a comment carries: in a link's `href` or in its
+     * text, where a bare address is a link too ({@see links}).
      *
      * @param string $html The stored comment content.
      * @return int The count, at most 100000 (the contract's ceiling).
@@ -282,14 +291,19 @@ final class Text
     }
 
     /**
-     * The distinct links of a comment, trailing punctuation removed.
+     * The distinct links of a comment, trailing punctuation removed: each tag stands for
+     * its `href`, `title` and `alt` values ({@see LINK_ATTRIBUTE}), so an image's address
+     * is not a link (shared rules F7, S2) while a link's target and a bare address are.
+     * When the regex gives up (a PCRE limit), the whole markup is read, as before: more
+     * links, never fewer.
      *
      * @param string $html The stored comment content.
      * @return array<int,string> The links, lower case, in order of appearance.
      */
     private static function links(string $html): array
     {
-        preg_match_all(self::LINK, $html, $matches);
+        $readable = preg_replace_callback(self::TAG, [self::class, 'linkAttributes'], $html) ?? $html;
+        preg_match_all(self::LINK, $readable, $matches);
         $links = [];
         foreach ($matches[0] as $url) {
             $links[strtolower(rtrim($url, '.,;:!?)'))] = true;
@@ -350,6 +364,26 @@ final class Text
             }
         }
         return $texts === [] ? $match[0] : ' ' . implode(' ', $texts) . ' ';
+    }
+
+    /**
+     * {@see links}'s callback: a tag becomes the values of its `href`, `title` and `alt`
+     * attributes between spaces, and nothing else of it (the whole tag when the regex
+     * gives up).
+     *
+     * @param array<int,string> $match The tag.
+     * @return string The replacement.
+     */
+    private static function linkAttributes(array $match): string
+    {
+        if (preg_match_all(self::LINK_ATTRIBUTE, $match[0], $attributes, PREG_SET_ORDER) === false) {
+            return $match[0];
+        }
+        $values = [];
+        foreach ($attributes as $attribute) {
+            $values[] = ($attribute[1] ?? '') . ($attribute[2] ?? '') . ($attribute[3] ?? '');
+        }
+        return ' ' . implode(' ', $values) . ' ';
     }
 
     /**

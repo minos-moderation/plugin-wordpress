@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Minos\WordPress\Tests\Unit;
 
+use Minos\WordPress\Admin\CommentsScreen;
 use Minos\WordPress\Meta;
 use Minos\WordPress\Outcome;
 use Minos\WordPress\Settings;
+use Minos\WordPress\Submission;
 use Minos\WordPress\Sweeper;
 use WpStub;
 
@@ -151,5 +153,208 @@ final class LateVerdictTest extends PluginTestCase
 
         self::assertSame('0', $this->field($id, 'comment_approved'));
         self::assertNull($this->field($id, Meta::AUTO_PUBLISHED));
+    }
+
+    /**
+     * Posts a comment and lets the timeout give it the failure mode under fail-closed:
+     * held, settled as `nieocenione`.
+     *
+     * @param string              $text     The comment.
+     * @param array<string,mixed> $settings Settings over fail-closed.
+     * @return int The comment id.
+     */
+    private function timedOutHeld(string $text, array $settings = []): int
+    {
+        $this->configure($settings + ['failure_mode' => Settings::FAIL_CLOSED]);
+        $id = $this->post($text);
+        $this->now += Settings::DEFAULT_TIMEOUT_MIN * 60;
+        do_action(Sweeper::HOOK);
+        self::assertSame(['0', Meta::UNASSESSED], [$this->field($id, 'comment_approved'), $this->field($id, Meta::STATUS)]);
+        WpStub::$events = [];
+        return $id;
+    }
+
+    /**
+     * Shared rule A7, decided by the owner (2026-11-01): a late verdict with `wsparcie` for a
+     * comment a moderator already approved is still a signal for the moderators, with the
+     * note that it came after the decision; the comment's status and everything else of
+     * the verdict stay as they were. A repeated delivery adds nothing; a late verdict
+     * without `wsparcie` signals nothing.
+     */
+    public function testALateSupportCueAfterAModeratorsApprovalIsASignalAndNothingElse(): void
+    {
+        $cue = ['kategorie' => ['samookaleczenie'], 'wsparcie' => true];
+        $support = $this->timedOutHeld('Komentarz testowy zatwierdzony przed werdyktem.', ['blocked_mode' => Settings::BLOCKED_SPAM]);
+        $plain = $this->post('Drugi komentarz testowy zatwierdzony przed werdyktem.');
+        $this->now += Settings::DEFAULT_TIMEOUT_MIN * 60;
+        do_action(Sweeper::HOOK);
+        WpStub::$events = [];
+        self::assertTrue(wp_set_comment_status($support, 'approve'));
+        self::assertTrue(wp_set_comment_status($plain, 'approve'));
+        $changes = WpStub::$statusChanges;
+
+        self::assertSame(200, $this->deliver(self::verdict($support, 'zablokowane', $cue)));
+        self::assertSame(200, $this->deliver(self::verdict($plain, 'zablokowane', ['kategorie' => ['nekanie']])));
+
+        self::assertSame($changes, WpStub::$statusChanges, 'neither held nor marked as spam: the approval stands');
+        self::assertSame(['1', Meta::UNASSESSED, null], [$this->field($support, 'comment_approved'),
+            $this->field($support, Meta::STATUS), $this->field($support, Meta::CATEGORIES)], 'the rest of the verdict is not applied');
+        self::assertSame(['1', '1'], [$this->field($support, Meta::SUPPORT), $this->field($support, Meta::SUPPORT_AFTER_DECISION)]);
+        $column = $this->column($support);
+        self::assertStringContainsString(CommentsScreen::supportAdvice(), $column);
+        self::assertStringContainsString(CommentsScreen::supportAfterDecisionNote(), $column);
+        self::assertSame(1, $this->plugin->wp->supportFlagsSince($this->now - CommentsScreen::SUPPORT_WINDOW_S),
+            'one comment in the comments screen\'s notice');
+        self::assertSame([], self::events(Outcome::HOOK_NOTIFY), 'WordPress mails the moderators only about a held comment');
+
+        self::assertSame([null, null], [$this->field($plain, Meta::SUPPORT), $this->field($plain, Meta::SUPPORT_AFTER_DECISION)],
+            'without wsparcie no signal');
+        self::assertStringNotContainsString(CommentsScreen::supportAdvice(), $this->column($plain));
+
+        // The gateway delivers again, later in its window.
+        $this->now += 11 * 60;
+        self::assertSame(200, $this->deliver(self::verdict($support, 'zablokowane', $cue)));
+        self::assertSame($changes, WpStub::$statusChanges);
+        self::assertSame(1, $this->plugin->wp->supportFlagsSince($this->now - CommentsScreen::SUPPORT_WINDOW_S));
+        self::assertSame([], self::events(Outcome::HOOK_NOTIFY));
+    }
+
+    /**
+     * Shared rule A7 for a comment the failure mode held after the timeout, nobody touching
+     * it: the late cue is a signal, and as the comment is held the moderator's e-mail goes
+     * out, once. The comment stays held, its status `nieocenione`.
+     */
+    public function testALateSupportCueForAHeldCommentMailsTheModeratorOnce(): void
+    {
+        $id = $this->timedOutHeld('Komentarz testowy wstrzymany po czasie oczekiwania.');
+        $changes = WpStub::$statusChanges;
+
+        self::assertSame(200, $this->deliver(self::verdict($id, 'bezpieczne', ['wsparcie' => true])));
+
+        self::assertSame(['0', Meta::UNASSESSED, '1', '1'], [$this->field($id, 'comment_approved'), $this->field($id, Meta::STATUS),
+            $this->field($id, Meta::SUPPORT), $this->field($id, Meta::SUPPORT_AFTER_DECISION)], 'a late safe verdict publishes nothing');
+        self::assertSame($changes, WpStub::$statusChanges);
+        self::assertSame([[$id]], array_column(self::events(Outcome::HOOK_NOTIFY), 'args'), 'the moderator is told');
+
+        // WP-Cron ran the e-mail; the gateway delivers the same verdict again.
+        WpStub::$events = [];
+        $this->now += 11 * 60;
+        self::assertSame(200, $this->deliver(self::verdict($id, 'bezpieczne', ['wsparcie' => true])));
+        self::assertSame([], self::events(Outcome::HOOK_NOTIFY), 'one signal, not two');
+    }
+
+    /**
+     * Shared rule A7 after the other decisions a person makes: a moderator who trashed a
+     * fail-open publication, and one who approved a comment while it still waited for its
+     * verdict. Each keeps its status and gets the cue with the note.
+     */
+    public function testALateSupportCueAfterOtherDecisionsIsASignal(): void
+    {
+        $cue = ['kategorie' => ['samookaleczenie'], 'wsparcie' => true];
+        $trashed = $this->autoPublished('Komentarz testowy przeniesiony do kosza.', ['blocked_mode' => Settings::BLOCKED_SPAM]);
+        self::assertTrue(wp_set_comment_status($trashed, 'trash'));
+        $this->configure(['failure_mode' => Settings::FAIL_CLOSED]);
+        $approved = $this->post('Komentarz testowy zatwierdzony, gdy czekał na werdykt.');
+        self::assertTrue(wp_set_comment_status($approved, 'approve'));
+        $changes = WpStub::$statusChanges;
+
+        self::assertSame(200, $this->deliver(self::verdict($trashed, 'zablokowane', $cue)));
+        self::assertSame(200, $this->deliver(self::verdict($approved, 'zablokowane', $cue)));
+
+        self::assertSame($changes, WpStub::$statusChanges);
+        self::assertSame(['trash', '1'], [$this->field($trashed, 'comment_approved'), $this->field($approved, 'comment_approved')]);
+        foreach ([$trashed, $approved] as $id) {
+            self::assertSame(['1', '1'], [$this->field($id, Meta::SUPPORT), $this->field($id, Meta::SUPPORT_AFTER_DECISION)]);
+        }
+        self::assertSame('zablokowane', $this->field($approved, Meta::STATUS), 'in time: the verdict is recorded, as before');
+        self::assertSame([], self::events(Outcome::HOOK_NOTIFY));
+    }
+
+    /**
+     * Shared rule A7 for a superseded text: the author edited the comment while it waited,
+     * so the verdict on the first text applies nothing, but its cue is recorded. The next
+     * revision's verdict then treats the comment as one with the cue: `zablokowane` holds
+     * it under "mark as spam" too.
+     */
+    public function testTheSupportCueOfASupersededTextIsRecordedAndKeptForTheNextVerdict(): void
+    {
+        $this->configure(['blocked_mode' => Settings::BLOCKED_SPAM]);
+        $id = $this->post('Pierwsza wersja komentarza testowego.');
+        wp_update_comment(['comment_ID' => $id, 'comment_content' => 'Druga wersja komentarza testowego.']);
+        self::assertSame(['1', Meta::PENDING], [$this->field($id, Meta::REVISION), $this->field($id, Meta::STATUS)]);
+        $changes = WpStub::$statusChanges;
+        WpStub::$events = [];
+
+        self::assertSame(200, $this->deliver(self::verdict($id, 'zablokowane', ['wsparcie' => true])));
+
+        self::assertSame($changes, WpStub::$statusChanges);
+        self::assertSame([Meta::PENDING, '1', '1'], [$this->field($id, Meta::STATUS), $this->field($id, Meta::SUPPORT),
+            $this->field($id, Meta::SUPPORT_AFTER_DECISION)]);
+        self::assertSame([], self::events(Outcome::HOOK_NOTIFY), 'the e-mail follows the next verdict');
+
+        $next = self::verdict($id, 'zablokowane');
+        $next['id'] = Submission::itemId($id, 1);
+        self::assertSame(200, $this->deliver($next));
+        self::assertSame(['0', 'zablokowane'], [$this->field($id, 'comment_approved'), $this->field($id, Meta::STATUS)],
+            'held for a person, never marked as spam');
+        self::assertSame([[$id]], array_column(self::events(Outcome::HOOK_NOTIFY), 'args'));
+    }
+
+    /**
+     * The same for a text changed without `edit_comment` (another plugin's direct write):
+     * the receiver sends the next revision instead of applying the verdict, and records
+     * its cue. A comment a person approved meanwhile keeps its status too.
+     */
+    public function testTheSupportCueOfATextChangedOnTheQuietIsRecorded(): void
+    {
+        $this->configure();
+        $waiting = $this->post('Komentarz testowy podmieniony przez inną wtyczkę.');
+        $approved = $this->post('Komentarz testowy podmieniony i zatwierdzony.');
+        WpStub::$comments[$waiting]['comment_content'] = 'Podmieniona treść testowa.';
+        WpStub::$comments[$approved]['comment_content'] = 'Druga podmieniona treść testowa.';
+        self::assertTrue(wp_set_comment_status($approved, 'approve'));
+        $changes = WpStub::$statusChanges;
+
+        self::assertSame(200, $this->deliver(self::verdict($waiting, 'zablokowane', ['wsparcie' => true])));
+        self::assertSame(200, $this->deliver(self::verdict($approved, 'zablokowane', ['wsparcie' => true])));
+
+        self::assertSame($changes, WpStub::$statusChanges);
+        self::assertSame([Meta::PENDING, '1'], [$this->field($waiting, Meta::STATUS), $this->field($waiting, Meta::REVISION)],
+            'the next revision waits');
+        self::assertSame([Meta::UNASSESSED, '1'], [$this->field($approved, Meta::STATUS), $this->field($approved, 'comment_approved')]);
+        foreach ([$waiting, $approved] as $id) {
+            self::assertSame(['1', '1'], [$this->field($id, Meta::SUPPORT), $this->field($id, Meta::SUPPORT_AFTER_DECISION)]);
+        }
+    }
+
+    /**
+     * A verdict for a revision the comment never reached, and one for a comment the plugin
+     * never sent, record nothing.
+     */
+    public function testALateSupportCueForNoRevisionOrNoCommentRecordsNothing(): void
+    {
+        $id = $this->timedOutHeld('Komentarz testowy bez kolejnych wersji.');
+        $ahead = self::verdict($id, 'zablokowane', ['wsparcie' => true]);
+        $ahead['id'] = Submission::itemId($id, 3);
+        self::assertSame(200, $this->deliver($ahead));
+        self::assertSame(200, $this->deliver(self::verdict($id + 1000, 'zablokowane', ['wsparcie' => true])));
+
+        self::assertSame([null, null], [$this->field($id, Meta::SUPPORT), $this->field($id, Meta::SUPPORT_AFTER_DECISION)]);
+        self::assertSame([], WpStub::$meta[$id + 1000] ?? [], 'nothing about a comment that does not exist');
+        self::assertSame([], self::events(Outcome::HOOK_NOTIFY));
+    }
+
+    /**
+     * What the "Minos" column shows for a comment.
+     *
+     * @param int $id The comment.
+     * @return string The column's HTML.
+     */
+    private function column(int $id): string
+    {
+        ob_start();
+        (new CommentsScreen($this->plugin->wp, $this->plugin->settings, $this->plugin->log))
+            ->renderColumn(CommentsScreen::COLUMN, $id);
+        return (string)ob_get_clean();
     }
 }

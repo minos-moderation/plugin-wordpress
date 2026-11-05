@@ -84,6 +84,31 @@ final class SubmissionTest extends PluginTestCase
         self::assertArrayNotHasKey('link_domains', $this->sentBody()['elementy'][0]['meta']);
     }
 
+    /**
+     * Shared rules F7 and S2: an image's address is not a link the reader sees, nor is a
+     * quote's `cite`; a link's target and a bare address are, also around an image.
+     */
+    public function testAnImagesAddressIsNotALink(): void
+    {
+        $this->configure();
+        $this->post('Zobacz <img src="https://obrazek.example/a.png" srcset="https://cdn.example/a2.png 2x" alt="foto" />'
+            . ' i <a href="https://sklep.example/x"><img src="https://grafika.example/b.png" alt="baner" /></a>'
+            . ' oraz https://goly.example/ <blockquote cite="https://cytat.example/">Cytat testowy</blockquote>');
+
+        $item = $this->sentBody()['elementy'][0];
+        self::assertSame(['links' => 2, 'link_domains' => ['sklep.example', 'goly.example'], 'author_first_post' => true],
+            $item['meta']);
+        foreach (['obrazek.example', 'cdn.example', 'grafika.example', 'cytat.example'] as $hidden) {
+            self::assertStringNotContainsString($hidden, $item['tekst']);
+        }
+        self::assertStringContainsString('https://goly.example/', $item['tekst'], 'a bare address is text');
+
+        $this->post('<img src="https://obrazek.example/c.png" alt="opis" /> Sam obrazek i tekst.');
+        $meta = $this->sentBody()['elementy'][0]['meta'];
+        self::assertSame(0, $meta['links']);
+        self::assertArrayNotHasKey('link_domains', $meta);
+    }
+
     public function testTheTextOfTitleAndAltAttributesIsAssessed(): void
     {
         $this->configure();
@@ -121,6 +146,20 @@ final class SubmissionTest extends PluginTestCase
         $text = $this->sentBody()['elementy'][0]['tekst'];
         self::assertStringContainsString("e\u{0301}", $text, 'the letter keeps its mark');
         self::assertStringContainsString('foto', $text);
+    }
+
+    /**
+     * Shared rule F7: a letter with its combining mark is text a reader sees, with nothing
+     * beside it too, and is sent as it is.
+     */
+    public function testALetterWithACombiningMarkAloneIsSent(): void
+    {
+        $this->configure();
+        $id = $this->post("Za\u{0301}");
+
+        self::assertTrue($this->pending($id));
+        self::assertNull($this->field($id, Meta::ERROR));
+        self::assertSame("Za\u{0301}", $this->sentBody()['elementy'][0]['tekst']);
     }
 
     public function testAnImagesAltIsSentBesideTheCommentsOwnText(): void
@@ -597,6 +636,10 @@ final class SubmissionTest extends PluginTestCase
             'an image with alt, fail-open'          => [$described, Settings::FAIL_OPEN, '1'],
             'an image with alt and title'           => [$titled, Settings::FAIL_CLOSED, '0'],
             'a blank link with a title'             => [$blankLink, Settings::FAIL_CLOSED, '0'],
+            // Shared rule F7: a mark with nothing to combine with is no text, on its own too.
+            'a lone combining grapheme joiner'      => ["\u{034F}", Settings::FAIL_CLOSED, '0'],
+            'a lone variation selector, fail-open'  => ['&#65039;', Settings::FAIL_OPEN, '1'],
+            'lone marks between spaces'             => [" \u{FE0F} \u{034F}\u{0301} ", Settings::FAIL_CLOSED, '0'],
         ] + self::invisibleOnly();
     }
 

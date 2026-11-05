@@ -10,6 +10,7 @@ use Minos\WordPress\Platform;
 use Minos\WordPress\Plugin;
 use Minos\WordPress\Settings;
 use Minos\WordPress\Submission;
+use Minos\WordPress\Sweeper;
 use PHPUnit\Framework\TestCase;
 use WpStub;
 
@@ -159,6 +160,43 @@ final class EndToEndTest extends TestCase
         foreach ($ids as $id) {
             self::assertSame(['1', 'bezpieczne'], [WpStub::$comments[$id]['comment_approved'], WpStub::$meta[$id][Meta::STATUS] ?? null]);
         }
+    }
+
+    /**
+     * Shared rule A7 over HTTP: the timeout held two comments (fail-closed) and a moderator
+     * approved them before the mock's late verdicts came, one of them with `wsparcie` and
+     * delivered twice. Both stay published; only the one with the cue carries it, once,
+     * with the note that it came after the decision.
+     */
+    public function testALateSupportCueAfterAModeratorsApprovalIsRecordedOnceOverHttp(): void
+    {
+        $offset = 0;
+        [$mock, $state, $env] = $this->start([], static function () use (&$offset): int {
+            return time() + $offset;
+        });
+        $support = WpStub::postComment(['comment_content' => 'Komentarz testowy [minos:blokuj] [minos:kategoria=samookaleczenie] [minos:dwa-razy]']);
+        $plain = WpStub::postComment(['comment_content' => 'Komentarz testowy [minos:blokuj] [minos:kategoria=nekanie]']);
+        $offset = Settings::DEFAULT_TIMEOUT_MIN * 60 + 60;
+        do_action(Sweeper::HOOK);
+        foreach ([$support, $plain] as $id) {
+            self::assertSame(Meta::UNASSESSED, WpStub::$meta[$id][Meta::STATUS] ?? null, 'the timeout settled it');
+            self::assertTrue(wp_set_comment_status($id, 'approve'));
+        }
+        $changes = WpStub::$statusChanges;
+        WpStub::save($state);
+
+        $this->worker($mock, $env);
+        $this->worker($mock, $env);
+        WpStub::load($state);
+
+        $answers = array_count_values(file($state . '.log', FILE_IGNORE_NEW_LINES) ?: []);
+        self::assertSame(['200' => 3], $answers, 'both verdicts and the repeat reached the receiver');
+        self::assertSame($changes, WpStub::$statusChanges, 'the approvals stand');
+        self::assertSame(['1', Meta::UNASSESSED, '1', '1'], [WpStub::$comments[$support]['comment_approved'],
+            WpStub::$meta[$support][Meta::STATUS], WpStub::$meta[$support][Meta::SUPPORT] ?? null,
+            WpStub::$meta[$support][Meta::SUPPORT_AFTER_DECISION] ?? null]);
+        self::assertSame(['1', null, null], [WpStub::$comments[$plain]['comment_approved'],
+            WpStub::$meta[$plain][Meta::SUPPORT] ?? null, WpStub::$meta[$plain][Meta::SUPPORT_AFTER_DECISION] ?? null]);
     }
 
     /**

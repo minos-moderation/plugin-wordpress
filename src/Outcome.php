@@ -37,7 +37,10 @@ defined('ABSPATH') || exit;
  *   (shared rule A7): `zablokowane` holds it whatever the "blocked" setting says, and a
  *   late verdict leaves a published one published. It stays held, or published, until a
  *   person decides, with the support cue in the "Minos" column, in the comments screen's
- *   notice and in the moderator's e-mail.
+ *   notice and in the moderator's e-mail. The cue is a signal whatever happened to the
+ *   comment: one that comes with a verdict the plugin no longer applies (a person decided,
+ *   the text changed, the failure mode settled it) is recorded all the same
+ *   ({@see supportAfterDecision}), and the comment's status stays.
  *
  * The final status is written after the action, never before: when another plugin's hook
  * throws in the middle of one, the comment still waits, so the sweep, the retry or the
@@ -169,6 +172,9 @@ final class Outcome
     public function verdict(int $id, array $payload): void
     {
         $late = $this->wp->meta($id, Meta::AUTO_PUBLISHED) === '1';
+        // A cue recorded before (with the verdict on an earlier text) still counts: a
+        // comment that carries it is never marked as spam nor taken off the page.
+        $support = $payload['wsparcie'] === true || $this->wp->meta($id, Meta::SUPPORT) === '1';
         if ($payload['wsparcie'] === true) {
             $this->wp->setMeta($id, Meta::SUPPORT, '1');
         }
@@ -187,18 +193,57 @@ final class Outcome
             return;
         }
         $qualification = (string)$payload['kwalifikacja'];
-        $support = $payload['wsparcie'] === true;
         $action = $this->action($id, $qualification, $support);
         $masked = is_string($payload['ocenzurowany']) ? $payload['ocenzurowany'] : null;
         if ($late) {
             $this->applyLate($id, $qualification, $action, $masked, $support);
             return;
         }
-        // A comment a person decided on keeps that decision: only the verdict is recorded.
+        // A comment a person decided on keeps that decision: only the verdict is recorded,
+        // and its support cue noted as one that came after the decision.
         if ($this->isHeld($id)) {
             $this->act($id, $action, $masked);
+        } elseif ($payload['wsparcie'] === true) {
+            $this->wp->setMeta($id, Meta::SUPPORT_AFTER_DECISION, '1');
         }
         $this->settle($id, $qualification);
+    }
+
+    /**
+     * Shared rule A7 for a verdict the plugin no longer applies: its `wsparcie` is still a
+     * signal for the moderators. A person decided on the comment (approved, held, spammed,
+     * trashed or edited it), its text changed since it was sent, or the failure mode
+     * settled it after the timeout: the cue is recorded ({@see Meta::SUPPORT}, so the
+     * "Minos" column and the comments screen's notice show it), with the note that it came
+     * after the decision ({@see Meta::SUPPORT_AFTER_DECISION}), and a comment that is held
+     * and no longer waits for a verdict gets the moderator's e-mail, which names the cue.
+     * Nothing else of the verdict applies: the status, the content and the categories stay.
+     *
+     * Once only: a comment that already carries the cue (a repeated delivery) gets nothing
+     * more. The cue goes last, so a hook that throws before it leaves the step to the
+     * gateway's next delivery. A comment the plugin never sent, and a verdict for a revision
+     * the comment has not reached, get nothing.
+     *
+     * @param int $id       The comment.
+     * @param int $revision The revision the verdict is for (0 for `wp:<id>`).
+     * @return void
+     */
+    public function supportAfterDecision(int $id, int $revision): void
+    {
+        if ($this->wp->meta($id, Meta::SUPPORT) === '1' || $this->wp->meta($id, Meta::STATUS) === ''
+            || $revision > (int)$this->wp->meta($id, Meta::REVISION)) {
+            return;
+        }
+        $comment = $this->wp->comment($id);
+        if ($comment === null) {
+            return;
+        }
+        $this->wp->setMeta($id, Meta::SUPPORT_AFTER_DECISION, '1');
+        // A waiting comment's e-mail follows its own verdict (filterNotifyModerator).
+        if ((string)$comment->comment_approved === '0' && $this->wp->meta($id, Meta::STATUS) !== Meta::PENDING) {
+            $this->scheduleNotification($id);
+        }
+        $this->wp->setMeta($id, Meta::SUPPORT, '1');
     }
 
     /**
@@ -387,9 +432,10 @@ final class Outcome
     /**
      * `comment_moderation_text` filter: the moderator's "awaiting moderation" e-mail about a
      * comment with the support cue carries the cue and what the moderator can do about it
-     * (shared rule A7), but only once {@see filterModerationRecipients} took the comment's
-     * author off its recipients in this request: an e-mail whose recipients nobody checked
-     * goes out as WordPress wrote it.
+     * (shared rule A7), and the note when it came after a decision
+     * ({@see Meta::SUPPORT_AFTER_DECISION}), but only once {@see filterModerationRecipients}
+     * took the comment's author off its recipients in this request: an e-mail whose
+     * recipients nobody checked goes out as WordPress wrote it.
      *
      * @param mixed      $message   The e-mail's text so far.
      * @param int|string $commentId The comment.
@@ -403,8 +449,10 @@ final class Outcome
                 || $this->wp->meta($id, Meta::SUPPORT) !== '1') {
                 return $message;
             }
+            $after = $this->wp->meta($id, Meta::SUPPORT_AFTER_DECISION) === '1'
+                ? ' ' . CommentsScreen::supportAfterDecisionNote() : '';
             return $message . "\r\n" . __('Sygnał wsparcia:', 'minos-moderation') . ' '
-                . CommentsScreen::supportAdvice() . "\r\n";
+                . CommentsScreen::supportAdvice() . $after . "\r\n";
         } catch (\Throwable $e) {
             // Another plugin's meta hook: the e-mail goes out as WordPress wrote it.
             return $message;

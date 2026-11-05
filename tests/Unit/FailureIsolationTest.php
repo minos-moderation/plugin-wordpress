@@ -287,6 +287,30 @@ final class FailureIsolationTest extends PluginTestCase
         $this->assertLoggedOnce(Log::STEP_VERDICT);
     }
 
+    /**
+     * Shared rule A7: a late support cue for a held comment whose e-mail cannot be
+     * scheduled (another plugin's hook) answers 500 and is not yet recorded, so the
+     * gateway's next delivery records it and schedules the e-mail.
+     */
+    public function testALateSupportCueThatFailsAnswers500AndTheRedeliveryRecordsIt(): void
+    {
+        $this->threeComments(['failure_mode' => Settings::FAIL_CLOSED]);
+        $this->now += Settings::DEFAULT_TIMEOUT_MIN * 60;
+        do_action(Sweeper::HOOK);
+        WpStub::$events = [];
+        $this->breakFor('schedule_event', function ($event): bool {
+            return is_object($event) && $event->hook === Outcome::HOOK_NOTIFY && $event->args === [$this->ids[1]];
+        });
+
+        self::assertSame(500, $this->deliver(self::verdict($this->ids[1], 'zablokowane', ['wsparcie' => true])));
+        self::assertNull($this->field($this->ids[1], Meta::SUPPORT), 'not recorded: the redelivery must not look like a repeat');
+        $this->assertLoggedOnce(Log::STEP_VERDICT);
+
+        self::assertSame(200, $this->deliver(self::verdict($this->ids[1], 'zablokowane', ['wsparcie' => true])));
+        self::assertSame(['0', '1'], [$this->field($this->ids[1], 'comment_approved'), $this->field($this->ids[1], Meta::SUPPORT)]);
+        self::assertSame([[$this->ids[1]]], array_column(self::events(Outcome::HOOK_NOTIFY), 'args'));
+    }
+
     public function testAMaskedWriteThatFailsBeforeTheUpdateIsDoneByTheRedelivery(): void
     {
         $this->threeComments(['censored_mode' => Settings::CENSORED_PUBLISH]);

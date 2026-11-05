@@ -134,7 +134,11 @@ final class CommentsScreen
         }
         if ($this->wp->meta($id, Meta::SUPPORT) === '1') {
             echo '<p><strong>' . esc_html__('Sygnał wsparcia:', 'minos-moderation') . '</strong> '
-                . esc_html(self::supportAdvice()) . '</p>';
+                . esc_html(self::supportAdvice());
+            if ($this->wp->meta($id, Meta::SUPPORT_AFTER_DECISION) === '1') {
+                echo '<br /><small>' . esc_html(self::supportAfterDecisionNote()) . '</small>';
+            }
+            echo '</p>';
         }
     }
 
@@ -182,6 +186,17 @@ final class CommentsScreen
     public static function supportAdvice(): string
     {
         return __('Autor może potrzebować pomocy. Wtyczka nie kontaktuje się z autorem — rozważ odpowiedź z informacją o wsparciu, np. telefon zaufania 116 123 (dorośli) lub 116 111 (dzieci i młodzież).', 'minos-moderation');
+    }
+
+    /**
+     * What the column adds to a support cue that came with a verdict the plugin no longer
+     * applied (shared rule A7).
+     *
+     * @return string Polish text.
+     */
+    public static function supportAfterDecisionNote(): string
+    {
+        return __('Sygnał nadszedł po decyzji moderatora (albo po zmianie treści lub upływie czasu oczekiwania) — wtyczka nie zmieniła statusu komentarza.', 'minos-moderation');
     }
 
     /**

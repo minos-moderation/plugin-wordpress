@@ -108,13 +108,50 @@ final class StatusAndMailTest extends IntegrationTestCase
             'the guard: WordPress mails the post\'s author about a held comment on their post');
 
         // Their account's address changed since the comment: WordPress mails the new one.
-        $changed = wp_update_user(['ID' => $this->authorId, 'user_email' => 'nowy.adres.autora@example.invalid']);
+        // In other letter case than WordPress compares it in: the address is the same one.
+        $changed = wp_update_user(['ID' => $this->authorId, 'user_email' => 'Nowy.Adres.Autora@example.invalid']);
         self::assertSame($this->authorId, $changed);
+        self::assertSame('Nowy.Adres.Autora@example.invalid', get_userdata($this->authorId)->user_email, 'stored as written');
         reset_phpmailer_instance();
         do_action(Outcome::HOOK_NOTIFY, $own);
         $mails = self::mails();
         self::assertSame([get_option('admin_email')], array_column($mails, 0), 'never its author, who wrote the post');
         self::assertStringContainsString(CommentsScreen::supportAdvice(), $mails[0][2]);
+    }
+
+    /**
+     * Shared rule A7, the case where nobody is left: a guest who types the site's address
+     * (in other letter case) as their own, under a post by the administrator, whom
+     * WordPress mails at that address only. The address leaves the recipients, so no
+     * e-mail goes out; the comment stays held with the cue for the comments screen.
+     */
+    public function testAGuestTypingTheSitesAddressTakesItOffTheModeratorsEmail(): void
+    {
+        $this->startGateway();
+        $site = (string)get_option('admin_email');
+        $typed = strtoupper($site);
+        self::assertNotSame($site, $typed, 'the guard: another letter case');
+        self::assertSame(0, strcasecmp(get_userdata(1)->user_email, $site), 'the guard: the administrator\'s own address');
+        $post = self::factory()->post->create(['post_author' => 1, 'comment_status' => 'open']);
+        add_filter('comment_flood_filter', '__return_false');
+        $support = $this->post('Komentarz testowy gościa z adresem strony.', ['comment_post_ID' => $post, 'email' => $typed]);
+        $control = $this->post('Drugi komentarz testowy gościa, bez sygnału.', ['comment_post_ID' => $post, 'email' => $typed]);
+        self::assertSame($typed, self::row($support)['comment_author_email'], 'stored as typed');
+
+        self::assertSame(200, $this->serveSigned(self::verdict($support, 'zablokowane',
+            ['kategorie' => ['samookaleczenie'], 'wsparcie' => true])));
+        // Held without the cue: an `ocenzurowane` with no masked text.
+        self::assertSame(200, $this->serveSigned(self::verdict($control, 'ocenzurowane')));
+
+        reset_phpmailer_instance();
+        do_action(Outcome::HOOK_NOTIFY, $control);
+        self::assertSame([$site], array_column(self::mails(), 0), 'the guard: WordPress mails the site\'s address');
+
+        reset_phpmailer_instance();
+        do_action(Outcome::HOOK_NOTIFY, $support);
+        self::assertSame([], self::mails(), 'nobody is left, so nobody is mailed');
+        self::assertSame(['0', 'zablokowane', '1'], [self::row($support)['comment_approved'],
+            self::stored($support, Meta::STATUS), self::stored($support, Meta::SUPPORT)], 'held, with the cue');
     }
 
     /**
@@ -134,6 +171,64 @@ final class StatusAndMailTest extends IntegrationTestCase
 
         self::assertSame(['1', 'zablokowane', '1', null], [self::row($id)['comment_approved'],
             self::stored($id, Meta::STATUS), self::stored($id, Meta::SUPPORT), self::stored($id, Meta::AUTO_PUBLISHED)]);
+    }
+
+    /**
+     * Shared rule A7 on the real WordPress, with the mock's own deliveries: after the
+     * timeout held three comments, a moderator approves two of them; then the gateway's
+     * late verdicts come, one of them with `wsparcie` and delivered twice. The approved
+     * comment with the cue stays published and carries the cue once, with its note; the
+     * one without the cue gets nothing; the held one with the cue stays held, and its
+     * moderator's e-mail names the cue and the note.
+     */
+    public function testALateSupportCueAfterAModeratorsApprovalIsASignalOnceAndChangesNoStatus(): void
+    {
+        $this->startGateway(['failure_mode' => Settings::FAIL_CLOSED, 'blocked_mode' => Settings::BLOCKED_SPAM]);
+        $approved = $this->post('Komentarz testowy [minos:blokuj] [minos:kategoria=samookaleczenie] [minos:dwa-razy]');
+        $plain = $this->post('Komentarz testowy [minos:blokuj] [minos:kategoria=nekanie]');
+        $held = $this->post('Komentarz testowy [minos:kategoria=samookaleczenie]');
+        foreach ([$approved, $plain, $held] as $id) {
+            self::age($id, 21 * 60);
+        }
+        do_action(Sweeper::HOOK);
+        foreach ([$approved, $plain, $held] as $id) {
+            self::assertSame(['0', Meta::UNASSESSED], [self::row($id)['comment_approved'], self::stored($id, Meta::STATUS)]);
+        }
+        self::assertTrue(wp_set_comment_status($approved, 'approve'));
+        self::assertTrue(wp_set_comment_status($plain, 'approve'));
+        wp_unschedule_hook(Outcome::HOOK_NOTIFY); // WP-Cron sent the timeout's e-mails
+        reset_phpmailer_instance();
+
+        $this->runMockWorker();
+        $this->runMockWorker();
+        $deliveries = $this->deliveries();
+        self::assertCount(4, $deliveries, 'the mock delivers the first verdict twice');
+        foreach ($deliveries as $delivery) {
+            self::assertSame(200, $this->serveDelivery($delivery));
+        }
+
+        self::assertSame(['1', Meta::UNASSESSED, null, '1', '1'], [self::row($approved)['comment_approved'],
+            self::stored($approved, Meta::STATUS), self::stored($approved, Meta::CATEGORIES),
+            self::stored($approved, Meta::SUPPORT), self::stored($approved, Meta::SUPPORT_AFTER_DECISION)],
+            'published as the moderator decided; only the cue is recorded');
+        self::assertCount(1, get_comment_meta($approved, Meta::SUPPORT), 'once, though delivered twice');
+        self::assertSame(['1', null, null], [self::row($plain)['comment_approved'], self::stored($plain, Meta::SUPPORT),
+            self::stored($plain, Meta::SUPPORT_AFTER_DECISION)], 'without wsparcie no signal');
+        self::assertSame(['0', Meta::UNASSESSED, '1'], [self::row($held)['comment_approved'], self::stored($held, Meta::STATUS),
+            self::stored($held, Meta::SUPPORT)], 'a late safe verdict publishes nothing');
+        self::assertSame([[$held]], array_column(self::events(Outcome::HOOK_NOTIFY), 'args'),
+            'an e-mail only about the comment that is held');
+        self::assertSame([], self::mails(), 'the webhook answers without sending e-mail');
+
+        do_action(Outcome::HOOK_NOTIFY, $held);
+
+        $mails = self::mails();
+        self::assertNotSame([], $mails);
+        foreach ($mails as [$to, , $text]) {
+            self::assertStringNotContainsString(self::row($held)['comment_author_email'], $to, 'never its author');
+            self::assertStringContainsString(CommentsScreen::supportAdvice(), $text);
+            self::assertStringContainsString(CommentsScreen::supportAfterDecisionNote(), $text);
+        }
     }
 
     public function testAPersonsDecisionAfterAFailOpenPublicationStandsAgainstALateVerdict(): void

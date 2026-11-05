@@ -23,7 +23,9 @@ defined('ABSPATH') || exit;
  *    the gateway retries;
  * 3. `WebhookPayload::parse` — `400` for a body that is not a payload; an id the verdict can
  *    no longer change (unknown, handled already — deliveries repeat —, decided by a person,
- *    or another revision than the comment's current one) gets `200` and nothing else;
+ *    or another revision than the comment's current one) gets `200` and nothing else but
+ *    its `wsparcie`, which is still a signal for the moderators (shared rule A7,
+ *    {@see Outcome::supportAfterDecision}; once, whatever the repeats);
  * 4. the verdict applied ({@see Outcome}) — only while the comment still reads as the text
  *    that was sent; a comment edited since is held for its next revision instead, which
  *    WP-Cron sends (the webhook itself never calls the gateway);
@@ -106,7 +108,12 @@ final class Receiver
         }
         if (preg_match(self::ID, $payload['id'], $match) === 1) {
             $id = (int)$match[1];
-            if ($this->outcome->awaitsVerdict($id, (int)($match[2] ?? 0)) && !$this->apply($id, $payload)) {
+            $revision = (int)($match[2] ?? 0);
+            if ($this->outcome->awaitsVerdict($id, $revision)) {
+                if (!$this->apply($id, $revision, $payload)) {
+                    return $this->wp->response(500);
+                }
+            } elseif ($payload['wsparcie'] === true && !$this->supportOnly($id, $revision)) {
                 return $this->wp->response(500);
             }
         }
@@ -114,22 +121,48 @@ final class Receiver
     }
 
     /**
+     * Records the support cue of a verdict that no longer changes the comment.
+     *
+     * @param int $id       The comment.
+     * @param int $revision The revision the verdict is for.
+     * @return bool False when it failed with an exception: recorded by step and comment id,
+     *     and the gateway's next delivery records the cue.
+     */
+    private function supportOnly(int $id, int $revision): bool
+    {
+        try {
+            $this->outcome->supportAfterDecision($id, $revision);
+        } catch (\Throwable $e) {
+            $this->outcome->failed(Log::STEP_VERDICT, $id);
+            return false;
+        }
+        return true;
+    }
+
+    /**
      * Applies a verdict to the text it is about, before anything else: a comment that no
      * longer reads as the text that was sent gets no verdict, and is sent again.
      *
-     * @param int                 $id      A comment {@see Outcome::awaitsVerdict} accepts.
-     * @param array<string,mixed> $payload The parsed payload.
+     * @param int                 $id       A comment {@see Outcome::awaitsVerdict} accepts.
+     * @param int                 $revision The revision the verdict is for.
+     * @param array<string,mixed> $payload  The parsed payload.
      * @return bool False when it failed with an exception: recorded by step and comment id,
      *     never by its message.
      */
-    private function apply(int $id, array $payload): bool
+    private function apply(int $id, int $revision, array $payload): bool
     {
         try {
             if ($this->outcome->readsAsSent($id)) {
                 $this->outcome->verdict($id, $payload);
-            } elseif (!$this->submission->reassessLater($id)) {
+                return true;
+            }
+            if (!$this->submission->reassessLater($id)) {
                 // Sent from WP-Cron: the webhook answers at once and never calls the gateway.
                 $this->outcome->abandon($id);
+            }
+            // The verdict was about another text, but its cue is about the person.
+            if ($payload['wsparcie'] === true) {
+                $this->outcome->supportAfterDecision($id, $revision);
             }
         } catch (\Throwable $e) {
             $this->outcome->failed(Log::STEP_VERDICT, $id);

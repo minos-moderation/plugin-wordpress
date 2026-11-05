@@ -129,7 +129,8 @@ Zasady, które obowiązują zawsze:
   dyskusji wymagają ręcznego zatwierdzania, komentarz zostaje w moderacji także po
   werdykcie „bezpieczne” — Minos dodaje kontrolę, nigdy jej nie usuwa.
 - **Decyzja człowieka wygrywa.** Jeśli moderator zatwierdził, usunął albo oznaczył
-  komentarz jako spam, zanim przyszedł werdykt, wtyczka tylko zapisuje werdykt.
+  komentarz jako spam, zanim przyszedł werdykt, wtyczka tylko zapisuje werdykt. Sygnał
+  wsparcia działa także wtedy (patrz „Sygnał wsparcia”).
 - **Spóźniony werdykt.** Jeśli przy fail-open komentarz został opublikowany bez werdyktu
   (minął czas oczekiwania), a werdykt nadejdzie później, wtyczka go stosuje: „zablokowane”
   przenosi komentarz do moderacji, „ocenzurowane” działa zgodnie z ustawieniem. Nie robi
@@ -231,7 +232,8 @@ Wysyłane są wyłącznie:
 - wybrany profil oceny;
 - sygnały antyspamowe: liczba odnośników w komentarzu, domeny tych odnośników (najwyżej
   10, np. `example.com.pl`, tylko z treści komentarza) i to, czy to pierwszy zatwierdzony
-  komentarz autora.
+  komentarz autora. Odnośnik to cel linku albo adres wpisany w tekście; adres obrazka nie
+  jest odnośnikiem i nie jest wysyłany.
 
 **Nigdy nie są wysyłane:** imię lub pseudonim autora, adres e-mail, adres IP,
 identyfikator użytkownika, adres strony autora ani dane przeglądarki. Adres e-mail służy
@@ -294,9 +296,21 @@ tylko o komentarzach oczekujących) — widać go w kolumnie **Minos** i w powia
 liście komentarzy. Autor komentarza nie dostaje żadnej wiadomości o sygnale wsparcia:
 WordPress wysyła e-mail do moderatora także autorowi wpisu, więc wtyczka usuwa z odbiorców
 tego e-maila adres autora komentarza (adres podany przy komentarzu i obecny adres jego
-konta), np. gdy autor komentuje własny wpis. Jeśli po usunięciu nie zostaje nikt (np.
-komentarz administratora pod adresem e-mail strony), e-mail nie jest wysyłany wcale —
-świadomie: komentarz i tak czeka w kolejce moderacji z sygnałem w kolumnie **Minos**.
+konta), np. gdy autor komentuje własny wpis. Gość, który wpisze przy komentarzu adres
+e-mail strony (z Ustawienia → Ogólne, wielkość liter bez znaczenia), sam zdejmuje ten adres
+z listy odbiorców. Jeśli po usunięciu nie zostaje nikt (np. taki komentarz pod wpisem
+administratora, którego WordPress powiadamia tylko pod adresem strony), e-mail nie jest
+wysyłany wcale — świadomie: komentarz i tak czeka wstrzymany w kolejce moderacji
+z sygnałem w kolumnie **Minos**.
+
+Sygnał wsparcia działa zawsze, także w werdykcie, którego wtyczka już nie stosuje: gdy
+przychodzi po decyzji moderatora (komentarz zatwierdzony, wstrzymany, oznaczony jako spam,
+przeniesiony do kosza albo zmieniony), po zmianie treści komentarza albo po upływie czasu
+oczekiwania. Taki werdykt nie zmienia statusu ani treści komentarza i nie zapisuje
+kategorii — wtyczka zapisuje tylko sygnał wsparcia z dopiskiem, że nadszedł po decyzji
+moderatora, widoczny w kolumnie **Minos** i w powiadomieniu na liście komentarzy.
+O komentarzu, który nadal jest wstrzymany, moderator dostaje też e-mail z informacją
+o sygnale. Powtórzone doręczenie tego samego werdyktu niczego nie dubluje.
 
 ## Dziennik i błędy
 

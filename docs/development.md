@@ -46,7 +46,9 @@ The administrator's manual is `README.md` (Polish). This page is for developers.
    `{"id":"wp:<ID>","tekst":…,"profil":…,"meta":{"links":…,"link_domains":[…],"author_first_post":…}}`
    (`wp:<ID>.<n>` for the n-th revision, see below)
    (`link_domains` only when the content has links: at most 10 registrable domains, found
-   with a short list of second-level suffixes instead of the Public Suffix List). A plain
+   with a short list of second-level suffixes instead of the Public Suffix List). A link is
+   a link's `href` or an address in the text (also in `title`/`alt` text, which is sent);
+   an image's `src` or `srcset` and a quote's `cite` are not (shared rules F7, S2). A plain
    text over 3000 characters is marked `_minos_cut`.
 3. The answer (shared rule D9.6), for every comment of the request:
    - `202` → a comment whose item id is in `przyjete` is accepted; any other is retried
@@ -122,7 +124,8 @@ Decisions worth knowing before changing anything:
   records WordPress's decision; publishing (a verdict or fail-open) approves only when it
   is `1`.
 - **A person's decision stands.** A comment that is no longer held when the verdict comes
-  keeps its status; only the verdict is recorded.
+  keeps its status; only the verdict is recorded, and its `wsparcie` as the support cue
+  noted as one after the decision (below).
 - **Late verdicts.** Under fail-open the timeout publishes and sets
   `_minos_auto_published`; a verdict arriving later is applied (`zablokowane` → hold,
   `ocenzurowane` → per setting), except that a comment with `wsparcie` stays published
@@ -140,10 +143,26 @@ Decisions worth knowing before changing anything:
   author too when they may edit the comment, so `comment_moderation_recipients`
   (`Outcome::filterModerationRecipients`, at `PHP_INT_MAX` so no later filter puts the
   author back) takes the comment's address and its account's current one
-  (`get_userdata`) off the recipients, compared without case. When nobody is left (an
-  administrator commenting under the site's address), no e-mail goes out. The cue goes
+  (`get_userdata`) off the recipients, compared without case. A guest who types the
+  site's address (`admin_email`, in any letter case) as their own takes it off the
+  recipients themselves; when nobody is left (such a comment under a post by the
+  administrator, whom WordPress mails at that address only), no e-mail goes out, and the
+  comment stays held with the cue in the column (`StatusAndMailTest`). The cue goes
   only into an e-mail whose recipients that filter checked in the same request, so a
   replaced `wp_notify_moderator` that skips the filter sends WordPress's text alone.
+  The cue is a signal whatever happened to the comment (the owner's decision of
+  2026-11-01): a verdict the plugin no longer applies — a person decided (approved, held,
+  spammed, trashed or edited the comment), its text changed since it was sent (an older
+  revision, a write without `edit_comment`), or the failure mode settled it after the
+  timeout — still records its `wsparcie` (`Outcome::supportAfterDecision`, from
+  `Receiver::handle`): `_minos_wsparcie` and `_minos_wsparcie_po_decyzji` = `1`, the note
+  "after the moderator's decision" in the column and the e-mail, and for a comment that is
+  held and no longer waits the moderator's e-mail from WP-Cron. Nothing else of that
+  verdict applies (status, content, categories). Once only: a comment that already carries
+  the cue gets nothing more, so a repeated delivery adds no second e-mail; the cue is
+  written last, so a hook that throws first answers `500` and the redelivery records it.
+  A comment that carries the cue from an earlier revision's verdict is treated as one with
+  the cue by every later verdict (never spam, never unpublished).
 - **Revisions.** A verdict is about the text that was sent. `Submission::onEdit`
   (`edit_comment`) sends a comment again as `wp:<ID>.<n>` (`_minos_revision`, absent = 0,
   fresh `_minos_held_at`) when its text changed while it waited for its verdict, or after
@@ -227,7 +246,10 @@ Decisions worth knowing before changing anything:
   sweep and the retry events (`_minos_waiting`, `_minos_retry_at`) and the support notice on the comments screen
   (every view, `_minos_wsparcie`, written only as `1`, with the comment date for the 7 days).
 - **Not done:** translation files (the source strings are Polish, in `__()` with the
-  `minos-moderation` domain, and `languages/` is loaded when present).
+  `minos-moderation` domain, and `languages/` is loaded when present). Shared rule F5d
+  (sending again a comment the failure mode published because the gateway refused it,
+  once the limit renews): not implemented, an optional rule (off by default where a
+  plugin has it), so not a deviation.
 
 ## WordPress APIs
 

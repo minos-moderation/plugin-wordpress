@@ -14,7 +14,8 @@ use PHPUnit\Framework\TestCase;
  * list" block must name the paths it may not touch (the receiver, the submission, every
  * file that decides publish or hold, the key and secret handling, what leaves the site and
  * what the plugin keeps, CI and the rules), and its "You may change" block none of them.
- * The checker runs on the real agents and on fixtures it must reject.
+ * The checker runs on the real agents and on fixtures it must reject. A registered hook
+ * refuses `git add -A`.
  */
 final class ClaudeRulesTest extends TestCase
 {
@@ -35,7 +36,7 @@ final class ClaudeRulesTest extends TestCase
      * its "You may change" block. The paths among them must exist, so a rename cannot leave
      * the list naming nothing.
      */
-    private const SONNET_RISK_MARKERS = [
+    public const SONNET_RISK_MARKERS = [
         'src/Receiver.php', 'src/Submission.php', 'src/Outcome.php', 'src/Sweeper.php',
         'src/Settings.php', 'src/Admin/SettingsPage.php', 'src/Log.php', 'src/Platform.php',
         'src/Plugin.php', 'src/Text.php', 'src/Meta.php', 'src/Retention.php', 'src/Upgrade.php',
@@ -107,6 +108,53 @@ final class ClaudeRulesTest extends TestCase
         $problems = self::problems(self::agents(self::FIXTURES . '/marker-in-allowed-block'));
 
         self::assertContains('programista-prosty: names src/Receiver.php in its "You may change" block', $problems);
+    }
+
+    /**
+     * `git add -A` is refused by a hook, not only by the rule's text: `.claude/settings.json`
+     * registers a PreToolUse hook on Bash whose command, run as Claude Code runs it (the
+     * call's JSON on stdin), refuses it with exit 2 and lets an explicit path through.
+     */
+    public function testAHookRefusingGitAddAllIsRegistered(): void
+    {
+        $settings = json_decode((string)file_get_contents(self::ROOT . '/.claude/settings.json'), true);
+        $commands = [];
+        foreach ($settings['hooks']['PreToolUse'] ?? [] as $entry) {
+            if (preg_match('/^(?:' . ($entry['matcher'] ?? '') . ')$/', 'Bash') === 1) {
+                foreach ($entry['hooks'] ?? [] as $hook) {
+                    if (($hook['type'] ?? null) === 'command') {
+                        $commands[] = (string)$hook['command'];
+                    }
+                }
+            }
+        }
+        self::assertNotEmpty($commands, 'no PreToolUse command hook on Bash is registered');
+        $refusing = array_filter($commands, static function (string $command): bool {
+            return self::runHook($command, 'git add -A')[0] === 2 && self::runHook($command, 'git add README.md')[0] === 0;
+        });
+        self::assertCount(1, $refusing, 'no registered hook refuses `git add -A` and lets `git add README.md` run');
+    }
+
+    /**
+     * Runs a hook command as Claude Code does: through the shell, in the project, with the
+     * Bash call's JSON on stdin.
+     *
+     * @return array{0:int,1:string} The exit code and stderr.
+     */
+    public static function runHook(string $command, string $bashCommand): array
+    {
+        $process = proc_open(['bash', '-c', $command], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            $pipes, (string)realpath(self::ROOT), ['CLAUDE_PROJECT_DIR' => (string)realpath(self::ROOT),
+                'PATH' => (string)getenv('PATH')]);
+        self::assertIsResource($process);
+        fwrite($pipes[0], (string)json_encode(['session_id' => 'test', 'hook_event_name' => 'PreToolUse',
+            'tool_name' => 'Bash', 'tool_input' => ['command' => $bashCommand, 'description' => 'test']]));
+        fclose($pipes[0]);
+        stream_get_contents($pipes[1]);
+        $err = (string)stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        return [proc_close($process), $err];
     }
 
     /**

@@ -27,7 +27,9 @@ the gateway delivers to a signed webhook. Part of Minos; its backlog item is
   7.4 and 8.3. No PHP 8 syntax (`tests/Repo/Php74SyntaxTest.php` guards the obvious).
 - No real posts in tests: use the mock gateway from `minos-moderation/client-php`.
 - An assertion asks about a property; a pattern that may match nothing needs a guard.
-- Never `git add -A`. Sessions open PRs; only the owner or the coordinating session merges.
+- Never `git add -A` (a hook refuses it). Sessions open PRs; only the owner or the
+  coordinating session merges, after `Review: <agent> @ <head SHA> — AKCEPTACJA`, which CI's
+  `Review trail` requires for any path outside `.github/review-trail/exempt-paths.txt`.
 - Model-pinned agents in `.claude/agents/`, copied from `client-php` and fitted to the
   plugin's paths (`programista-prosty`'s risk list above all).
 - This file stays small (`tests/Repo/ClaudeRulesTest.php` pins its size).

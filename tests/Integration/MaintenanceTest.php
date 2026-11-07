@@ -12,13 +12,29 @@ use Minos\Client\Signature;
  *
  * WordPress's maintenance mode (a recent `.maintenance` file while core, a plugin or a theme
  * updates) answers every request before any plugin loads: `wp-settings.php` calls
- * `wp_maintenance()`, so the receiver never runs. This test asks core's own answer, as a
- * gateway delivery gets it (a JSON `POST` to the route): `503`. A site's own maintenance
- * page (`wp-content/maintenance.php`) answers with whatever code it sends, so the README
- * tells the administrator it must answer `503`.
+ * `wp_maintenance()`, so the receiver never runs. The test runs in one PHP process with
+ * WordPress loaded, so it cannot send a request through `wp-settings.php`; it proves the
+ * two halves instead: in the `wp-settings.php` of the WordPress under test that call comes
+ * before the must-use and the active plugins are loaded, and `wp_maintenance()` itself,
+ * asked as a gateway delivery asks (a JSON `POST` to the route), answers `503`. A site's own
+ * maintenance page (`wp-content/maintenance.php`) answers with whatever code it sends, so
+ * the README tells the administrator it must answer `503`.
  */
 final class MaintenanceTest extends IntegrationTestCase
 {
+    public function testMaintenanceModeIsDecidedBeforeAnyPluginLoads(): void
+    {
+        $settings = (string)file_get_contents(ABSPATH . 'wp-settings.php');
+        $maintenance = strpos($settings, "\nwp_maintenance();");
+        $mustUse = strpos($settings, 'foreach ( wp_get_mu_plugins() as');
+        $plugins = strpos($settings, 'foreach ( wp_get_active_and_valid_plugins() as');
+        self::assertIsInt($maintenance, 'the call must be found, or the order proves nothing');
+        self::assertIsInt($mustUse, 'the must-use plugins\' loop must be found');
+        self::assertIsInt($plugins, 'the plugins\' loop must be found');
+        self::assertLessThan($mustUse, $maintenance);
+        self::assertLessThan($plugins, $maintenance);
+    }
+
     public function testMaintenanceModeAnswersAGatewayDelivery503(): void
     {
         $flag = ABSPATH . '.maintenance';

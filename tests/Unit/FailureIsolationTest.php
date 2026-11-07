@@ -11,6 +11,7 @@ use Minos\WordPress\Outcome;
 use Minos\WordPress\Settings;
 use Minos\WordPress\Submission;
 use Minos\WordPress\Sweeper;
+use Minos\WordPress\Upgrade;
 use WpStub;
 
 /**
@@ -496,6 +497,145 @@ final class FailureIsolationTest extends PluginTestCase
 
         self::assertSame([['moderator', $this->ids[0]], ['moderator', $this->ids[2]]], WpStub::$emails);
         $this->assertLoggedOnce(Log::STEP_NOTIFY);
+    }
+
+    /**
+     * Makes the database refuse a comment meta write, a given number of times: wpdb answers
+     * `false` and throws nothing, so `update_comment_meta` answers `false`.
+     *
+     * @param int    $id    The comment.
+     * @param string $key   The meta key.
+     * @param int    $times How many times (-1: always).
+     */
+    private function refuseMeta(int $id, string $key, int $times = 1): void
+    {
+        add_filter('update_comment_metadata', static function ($check, $objectId, $metaKey) use ($id, $key, &$times) {
+            if ($times !== 0 && (int)$objectId === $id && $metaKey === $key) {
+                $times--;
+                return false;
+            }
+            return $check;
+        }, 10, 3);
+    }
+
+    /**
+     * `update_comment_meta` answers `false` also for a value already stored; that is no
+     * failure. A value the database refused is one, and it throws without the value.
+     */
+    public function testAnUnchangedMetaValueIsStoredAndARefusedOneThrows(): void
+    {
+        $id = WpStub::insertComment([]);
+        $wp = $this->plugin->wp;
+        $wp->setMeta($id, Meta::STATUS, Meta::PENDING);
+        self::assertFalse(update_comment_meta($id, Meta::STATUS, Meta::PENDING), 'WordPress\'s answer for an unchanged value');
+        $wp->setMeta($id, Meta::STATUS, Meta::PENDING);
+        $this->refuseMeta($id, Meta::STATUS, -1);
+        $wp->setMeta($id, Meta::STATUS, Meta::PENDING);
+
+        $thrown = null;
+        try {
+            $wp->setMeta($id, Meta::STATUS, 'tajna treść');
+        } catch (\RuntimeException $e) {
+            $thrown = $e;
+        }
+        self::assertInstanceOf(\RuntimeException::class, $thrown, 'a refused write must throw');
+        self::assertStringNotContainsString('tajna', $thrown->getMessage(), 'the value stays out of the exception');
+        self::assertSame(Meta::PENDING, $this->field($id, Meta::STATUS));
+    }
+
+    /**
+     * Shared rule F10: the gateway counts any `2xx` as delivered. A verdict whose final
+     * status the database refused (wpdb answers `false`, no exception) is not stored, so the
+     * webhook answers `500`, and the gateway's next delivery stores it.
+     */
+    public function testAVerdictWhoseStatusIsNotStoredAnswers500AndTheRedeliveryStoresIt(): void
+    {
+        $this->threeComments([]);
+        $this->refuseMeta($this->ids[1], Meta::STATUS);
+
+        self::assertSame(500, $this->deliver(self::verdict($this->ids[1], 'bezpieczne', ['kategorie' => ['spam']])));
+        self::assertTrue($this->pending($this->ids[1]), 'not settled: the redelivery must not look like a repeat');
+        $this->assertLoggedOnce(Log::STEP_VERDICT);
+
+        self::assertSame(200, $this->deliver(self::verdict($this->ids[1], 'bezpieczne', ['kategorie' => ['spam']])));
+        self::assertSame(['1', 'bezpieczne', 'spam'], [$this->field($this->ids[1], 'comment_approved'),
+            $this->field($this->ids[1], Meta::STATUS), $this->field($this->ids[1], Meta::CATEGORIES)]);
+        self::assertNull($this->field($this->ids[1], Meta::WAITING));
+        self::assertCount(1, array_filter(WpStub::$statusChanges, function (array $change): bool {
+            return $change[0] === $this->ids[1];
+        }), 'approved once');
+    }
+
+    /**
+     * The same for a late support cue (shared rules A7, F10): a cue the database refused is
+     * not recorded, so `500`, and the redelivery records it.
+     */
+    public function testALateSupportCueThatIsNotStoredAnswers500AndTheRedeliveryStoresIt(): void
+    {
+        $this->threeComments(['failure_mode' => Settings::FAIL_CLOSED]);
+        $this->now += Settings::DEFAULT_TIMEOUT_MIN * 60;
+        do_action(Sweeper::HOOK);
+        $this->refuseMeta($this->ids[1], Meta::SUPPORT);
+
+        self::assertSame(500, $this->deliver(self::verdict($this->ids[1], 'zablokowane', ['wsparcie' => true])));
+        self::assertNull($this->field($this->ids[1], Meta::SUPPORT));
+        $this->assertLoggedOnce(Log::STEP_VERDICT);
+
+        self::assertSame(200, $this->deliver(self::verdict($this->ids[1], 'zablokowane', ['wsparcie' => true])));
+        self::assertSame(['1', '1'], [$this->field($this->ids[1], Meta::SUPPORT), $this->field($this->ids[1], Meta::SUPPORT_AFTER_DECISION)]);
+    }
+
+    /**
+     * A refused write never escapes into a person's request: the author's comment stays
+     * held and nothing is sent; an edit and a person's status change finish, recorded by
+     * step and comment id.
+     */
+    public function testARefusedWriteInAPersonsRequestIsRecordedAndNeverEscapes(): void
+    {
+        $this->configure();
+        $this->ids = [0, 0];
+        // The id the next comment gets: the write fails while it is being posted.
+        $next = WpStub::$comments === [] ? 1 : max(array_keys(WpStub::$comments)) + 1;
+        $this->refuseMeta($next, Meta::STATUS);
+
+        $this->ids[1] = $this->post('Komentarz, którego stanu baza nie zapisała.');
+
+        self::assertSame($next, $this->ids[1]);
+        self::assertSame(['0', null], [$this->field($this->ids[1], 'comment_approved'), $this->field($this->ids[1], Meta::STATUS)]);
+        self::assertSame([], WpStub::$requests, 'nothing sent for a comment the plugin could not mark');
+        $this->assertLoggedOnce(Log::STEP_SUBMIT);
+
+        $edited = $this->post('Komentarz edytowany, gdy baza odmawia zapisu.');
+        $this->refuseMeta($edited, Meta::REVISION);
+        wp_update_comment(['comment_ID' => $edited, 'comment_content' => 'Zmieniona treść komentarza.']);
+        self::assertSame(['0', Log::failureCode(Log::STEP_SUBMIT)], [$this->field($edited, 'comment_approved'), $this->field($edited, Meta::ERROR)]);
+
+        // A publication left half-finished (WordPress approved, the plugin had not settled it).
+        $held = $this->post('Komentarz wstrzymany przez osobę, gdy baza odmawia zapisu.');
+        WpStub::$comments[$held]['comment_approved'] = '1';
+        WpStub::$meta[$held][Meta::AUTO_PUBLISHED] = '1';
+        $this->refuseMeta($held, Meta::STATUS);
+        self::assertTrue(wp_set_comment_status($held, 'hold'));
+        self::assertSame(['0', Log::failureCode(Log::STEP_VERDICT)], [$this->field($held, 'comment_approved'), $this->field($held, Meta::ERROR)]);
+    }
+
+    /**
+     * An update whose write the database refused runs on `init`: nothing escapes, the data
+     * version stays, and the next request runs the steps again.
+     */
+    public function testAnUpdateWhoseWriteIsRefusedRunsAgainOnTheNextRequest(): void
+    {
+        $this->configure();
+        $waiting = $this->post('Komentarz czekający przed aktualizacją.');
+        unset(WpStub::$meta[$waiting][Meta::WAITING], WpStub::$options[Upgrade::OPTION]);
+        $this->refuseMeta($waiting, Meta::WAITING);
+
+        do_action('init');
+
+        self::assertArrayNotHasKey(Upgrade::OPTION, WpStub::$options);
+        self::assertNull($this->field($waiting, Meta::WAITING));
+        do_action('init');
+        self::assertSame([Upgrade::VERSION, '1'], [WpStub::$options[Upgrade::OPTION], $this->field($waiting, Meta::WAITING)]);
     }
 
     public function testNoExceptionMessageOrTraceIsReadInThePluginsCode(): void

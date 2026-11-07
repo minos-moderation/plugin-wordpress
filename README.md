@@ -334,7 +334,9 @@ komentarza — bez treści błędu, która mogłaby zawierać tekst komentarza �
 pozostałe komentarze dalej. Ten komentarz czeka: krok zostaje powtórzony w następnym
 przebiegu WP-Cron albo przy ponownym doręczeniu werdyktu przez bramę. Przy fail-open
 komentarz, który WordPress zdążył opublikować, zostaje opublikowany; dokończenie zapisu
-następuje w kolejnym przebiegu.
+następuje w kolejnym przebiegu. Tak samo wtyczka traktuje zapis, którego baza danych nie
+przyjęła: webhook odpowiada wtedy błędem (HTTP 500) zamiast potwierdzenia, więc brama
+doręcza werdykt ponownie i nie przepada on po cichu.
 
 ## Wyłączenie i usunięcie
 

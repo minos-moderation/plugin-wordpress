@@ -114,17 +114,29 @@ class Platform
     }
 
     /**
-     * Sets a comment meta value. WordPress unslashes what it is given, hence the slash:
-     * without it a backslash in a stored original would be lost.
+     * Sets a comment meta value, or throws. WordPress unslashes what it is given, hence the
+     * slash: without it a backslash in a stored original would be lost.
+     *
+     * `update_comment_meta` answers `false` both when the database refused the write (wpdb
+     * answers `false`, no exception) and when the stored value already was this one, so a
+     * `false` is read back: only a value that is not stored is a failure. A failure throws,
+     * so the step that wrote it fails like any other ({@see Outcome::failed}): the webhook
+     * answers `500` instead of `200` for a verdict it did not record (shared rule F10), and
+     * the sweep or the retry repeats its step.
      *
      * @param int        $id    The comment id.
      * @param string     $key   The meta key.
      * @param string|int $value The value.
      * @return void
+     * @throws \RuntimeException When the value is not stored. Its message names the key only.
      */
     public function setMeta(int $id, string $key, $value): void
     {
-        update_comment_meta($id, $key, wp_slash((string)$value));
+        $value = (string)$value;
+        if (update_comment_meta($id, $key, wp_slash($value)) !== false || $this->meta($id, $key) === $value) {
+            return;
+        }
+        throw new \RuntimeException('The comment meta ' . $key . ' was not stored.');
     }
 
     /**

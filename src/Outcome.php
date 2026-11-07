@@ -503,7 +503,12 @@ final class Outcome
         $published = $this->wp->meta($id, Meta::AUTO_PUBLISHED) === '1';
         $this->forgetAutoPublication($id);
         if ($published && $newStatus === 'unapproved' && $this->wp->meta($id, Meta::STATUS) === Meta::PENDING) {
-            $this->settle($id, Meta::UNASSESSED);
+            try {
+                $this->settle($id, Meta::UNASSESSED);
+            } catch (\Throwable $e) {
+                // In the person's request: nothing escapes. The person's hold stands.
+                $this->failed(Log::STEP_VERDICT, $id);
+            }
         }
     }
 

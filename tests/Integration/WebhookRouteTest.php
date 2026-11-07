@@ -82,6 +82,34 @@ final class WebhookRouteTest extends IntegrationTestCase
         self::assertCount(1, self::mails(), 'the post\'s author was mailed once, not once a delivery');
     }
 
+    /**
+     * Shared rule F10 on the real WordPress: `update_comment_meta` answers `false` both for a
+     * write that stored nothing (its own short-circuit filter here, where a refusing database
+     * gives the same answer) and for an unchanged value. The first is a verdict not stored:
+     * `500`, and the gateway's next delivery stores it; the second is no failure.
+     */
+    public function testAVerdictWhoseStatusIsNotStoredAnswers500AndTheRedeliveryStoresIt(): void
+    {
+        $this->startGateway();
+        $id = $this->post('Komentarz, którego werdyktu baza nie zapisała.');
+        $this->runMockWorker();
+        $deliveries = $this->deliveries();
+        self::assertCount(1, $deliveries);
+        self::assertFalse(update_comment_meta($id, Meta::WAITING, '1'), 'WordPress\'s answer for an unchanged value');
+        $refuse = static function ($check, $objectId, $key) use ($id) {
+            return (int)$objectId === $id && $key === Meta::STATUS ? false : $check;
+        };
+
+        add_filter('update_comment_metadata', $refuse, 10, 3);
+        self::assertSame(500, $this->serveDelivery($deliveries[0]));
+        remove_filter('update_comment_metadata', $refuse, 10);
+        self::assertSame(Meta::PENDING, self::stored($id, Meta::STATUS));
+
+        self::assertSame(200, $this->serveDelivery($deliveries[0]));
+        self::assertSame(['1', 'bezpieczne'], [self::row($id)['comment_approved'], self::stored($id, Meta::STATUS)]);
+        self::assertNull(self::stored($id, Meta::WAITING));
+    }
+
     public function testTheRouteTakesOnlyPostAndAnswers404WhileSwitchedOff(): void
     {
         $this->configure();

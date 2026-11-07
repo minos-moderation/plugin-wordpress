@@ -225,6 +225,14 @@ Decisions worth knowing before changing anything:
   comment it carried due, recorded once under its first comment
   (`Outcome::failedTogether`), and the next request of the pass goes on. The stubbed
   `get_comment` runs core's `get_comment` filter, so a test can make one comment fail.
+  A meta write the database refuses is such a failure too: `Platform::setMeta` throws when
+  `update_comment_meta` stored nothing (wpdb answers `false` and throws nothing; the same
+  `false` means an unchanged value, so the value is read back first). Where no step
+  isolates it, in a person's request (the author's `comment_post`, an `edit_comment`, a
+  `transition_comment_status`) and in `Upgrade` on `init`, it is caught there: the comment
+  stays held, and an upgrade runs again on the next request. The stubbed
+  `update_comment_meta` runs core's `update_comment_metadata` short-circuit, so a test can
+  refuse one write.
 - **Slashes.** `wp_update_comment` and `update_comment_meta` unslash their input, so
   `Platform` slashes it; the stubs unslash too, and a test holds a backslash.
 - **Notifications.** A `notify_moderator` filter suppresses the "awaiting moderation" e-mail
@@ -260,7 +268,7 @@ it maps `F10`; the entries above name the other rules where they are carried out
 
 | Id | In short | WordPress: mechanism, or deviation |
 |---|---|---|
-| `F10` | the receiver answers `2xx` only for a stored verdict; a platform page in its place must be a non-`2xx` | odstępstwo: a store that fails without an exception still answers `200`. `Receiver::handle` answers `500` only when applying throws (`FailureIsolationTest::testAWebhookThatFailsAnswers500AndTheRedeliveryIsApplied`); `Platform::setMeta` drops `update_comment_meta`'s result, so a database write of `_minos_status` that fails in `Outcome::settle` (wpdb answers `false`, no exception) ends in `200` while `_minos_status` still says `oczekuje`: the gateway counts the verdict as delivered and the plugin has not recorded it (to be fixed after the whole-project review). A repeat, another revision or an unknown comment answers `200` with nothing to store (`ReceiverTest::testARepeatedDeliveryIs200AndChangesNothing`, `testAnUnknownIdIs200AndChangesNothing`, `RevisionTest::testAVerdictForAnotherRevisionIs200AndChangesNothing`). The platform's page: WordPress's maintenance mode answers before any plugin loads, with `503` (`tests/Integration/MaintenanceTest.php`); a site's own `wp-content/maintenance.php` sends its own code, and the README tells the administrator it must answer `503` |
+| `F10` | the receiver answers `2xx` only for a stored verdict; a platform page in its place must be a non-`2xx` | `Receiver::handle` answers `200` only once the verdict is applied and stored, or once there is nothing to store. Applying it (`Receiver::apply`) and recording a late support cue (`Receiver::supportOnly` → `Outcome::supportAfterDecision`) run in `try`: an exception (another plugin's hook) and a meta write the database refused (`Platform::setMeta` throws when `update_comment_meta` stored nothing, an unchanged value excepted) answer `500`, and the gateway's next delivery stores the verdict (`FailureIsolationTest::testAWebhookThatFailsAnswers500AndTheRedeliveryIsApplied`, `testAVerdictWhoseStatusIsNotStoredAnswers500AndTheRedeliveryStoresIt`, `testALateSupportCueThatIsNotStoredAnswers500AndTheRedeliveryStoresIt`, `testALateSupportCueThatFailsAnswers500AndTheRedeliveryRecordsIt`; on the real WordPress `WebhookRouteTest::testAVerdictWhoseStatusIsNotStoredAnswers500AndTheRedeliveryStoresIt`). A repeat, another revision or an unknown comment answers `200` with nothing to store (`ReceiverTest::testARepeatedDeliveryIs200AndChangesNothing`, `testAnUnknownIdIs200AndChangesNothing`, `RevisionTest::testAVerdictForAnotherRevisionIs200AndChangesNothing`). The platform's page: WordPress's maintenance mode answers before any plugin loads, with `503` (`tests/Integration/MaintenanceTest.php`); a site's own `wp-content/maintenance.php` sends its own code, and the README tells the administrator it must answer `503` |
 
 ## WordPress APIs
 
@@ -276,7 +284,9 @@ setting the request body from `php://input`, `WP_REST_Request::get_body()` and
 `wp_schedule_single_event`, `wp_schedule_event`, `wp_next_scheduled`, `wp_unschedule_hook`,
 the `cron_schedules` filter, `get_comment`, `get_comments` (`status => any`, meta, `count`,
 `user_id`, `author_email`, `date_query`, `update_comment_meta_cache`), `get_comment_meta` / `update_comment_meta` /
-`delete_comment_meta` / `delete_metadata`, `wp_set_comment_status` (false when nothing
+`delete_comment_meta` / `delete_metadata` (`update_comment_meta` answers `false` both for a
+refused write and for an unchanged value, after its `update_comment_metadata`
+short-circuit), `wp_set_comment_status` (false when nothing
 changed; approval mails the post's author), `transition_comment_status`,
 `wp_update_comment` (unslashes; returns `1`/`0`, or `false`/`WP_Error`; runs
 `pre_comment_content`, `comment_save_pre` and `wp_update_comment_data`, then

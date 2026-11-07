@@ -210,7 +210,12 @@ final class Submission
         if ($this->wp->meta($id, Meta::SENT_HASH) === '' || $this->outcome->readsAsSent($id)) {
             return;
         }
-        $this->reassess($id);
+        try {
+            $this->reassess($id);
+        } catch (\Throwable $e) {
+            // In the editor's request: nothing escapes. The comment stays held.
+            $this->outcome->failed(Log::STEP_SUBMIT, $id);
+        }
     }
 
     /**
@@ -637,10 +642,16 @@ final class Submission
         if ($wordpress === null || $id <= 0 || (string)$approved !== '0') {
             return;
         }
-        $this->wp->setMeta($id, Meta::STATUS, Meta::PENDING);
-        $this->wp->setMeta($id, Meta::WAITING, '1');
-        $this->wp->setMeta($id, Meta::HELD_AT, $this->wp->now());
-        $this->wp->setMeta($id, Meta::WP_APPROVED, $wordpress);
+        try {
+            $this->wp->setMeta($id, Meta::STATUS, Meta::PENDING);
+            $this->wp->setMeta($id, Meta::WAITING, '1');
+            $this->wp->setMeta($id, Meta::HELD_AT, $this->wp->now());
+            $this->wp->setMeta($id, Meta::WP_APPROVED, $wordpress);
+        } catch (\Throwable $e) {
+            // In the author's request: nothing escapes. The comment stays held for a person.
+            $this->outcome->failed(Log::STEP_SUBMIT, $id);
+            return;
+        }
         $this->submitIsolated($id);
     }
 

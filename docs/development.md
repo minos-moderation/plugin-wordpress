@@ -248,7 +248,9 @@ Decisions worth knowing before changing anything:
   post's author is mailed by core itself on approval (`wp_set_comment_status` hooks
   `wp_new_comment_notify_postauthor`), so the plugin never sends that one.
 - **Retention (shared rule D9.11).** `Outcome::settle` records `_minos_decided_at`;
-  `Retention` (hourly, `Retention::BATCH` a run, also while switched off) removes every
+  `Retention` (hourly, `Retention::BATCH` a run, also while switched off, but not while the
+  plugin is deactivated: deactivation unschedules its hook, activation schedules it again,
+  and the README says so for the forum's privacy notice) removes every
   `_minos_*` key of a comment settled more than 30 days ago — the original of a masked
   comment, the held mask, the verdict, the categories. Its query compares
   `_minos_decided_at` by value (`meta_compare` `<`), once an hour, over the comments of the

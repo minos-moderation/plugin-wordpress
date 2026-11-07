@@ -276,7 +276,8 @@ sygnał wsparcia, oryginał komentarza opublikowanego w wersji zamaskowanej, wer
 zamaskowaną komentarza wstrzymanego do moderacji oraz dane techniczne (czasy, skrót
 wysłanego tekstu). **30 dni po rozstrzygnięciu** komentarza (werdykt albo tryb „Gdy brak
 werdyktu”) wtyczka usuwa wszystkie te dane — także oryginał — co godzinę, przez WP-Cron,
-również gdy moderacja jest wyłączona. Sam komentarz zostaje bez zmian: wersja zamaskowana
+również gdy moderacja jest wyłączona (ale nie gdy wtyczka jest dezaktywowana — patrz
+„Wyłączenie i usunięcie”). Sam komentarz zostaje bez zmian: wersja zamaskowana
 pozostaje opublikowana, a kolumna **Minos** pokazuje odtąd „—”. Dane komentarzy, które
 wciąż czekają na werdykt, nie są usuwane.
 
@@ -355,7 +356,11 @@ doręcza werdykt ponownie i nie przepada on po cichu.
 
 - **Wyłączenie moderacji** w ustawieniach zatrzymuje wtyczkę (patrz „Instalacja”).
 - **Dezaktywacja** zatrzymuje zadania WP-Cron. Komentarze czekające na werdykt zostają
-  w moderacji, ustawienia zostają zachowane.
+  w moderacji, ustawienia zostają zachowane. Zatrzymuje też usuwanie danych po 30 dniach:
+  dane `_minos_*` (także oryginały komentarzy opublikowanych w wersji zamaskowanej)
+  zostają do ponownej aktywacji, która wznawia usuwanie, albo do usunięcia wtyczki, które
+  kasuje je wszystkie. Uwzględnij to w polityce prywatności, jeśli dezaktywujesz wtyczkę
+  na dłużej.
 - **Usunięcie** wtyczki kasuje jej ustawienia (w tym klucz i sekret), dziennik, zadania
   i wszystkie dane `_minos_*` przy komentarzach. Komentarze zostają: opublikowana wersja
   zamaskowana pozostaje zamaskowana (oryginał znika razem z danymi wtyczki), a czekające —

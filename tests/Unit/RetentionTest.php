@@ -12,7 +12,7 @@ use Minos\WordPress\Upgrade;
 use WpStub;
 
 /**
- * Shared rule D9.11: what the plugin keeps about a settled comment — the original of a
+ * Shared rule A8: what the plugin keeps about a settled comment — the original of a
  * masked one, the masked text a moderator was shown, the verdict and its categories — goes
  * 30 days after the comment was settled. The comment itself stays. Invented comments only.
  */

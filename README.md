@@ -82,7 +82,7 @@ za udane i werdykt przepadnie.
 | Sekret webhooka | — | Służy wyłącznie do sprawdzania podpisu werdyktów i nigdy nie jest wysyłany. Strona pokazuje tylko jego początek. |
 | Profil oceny | `forum_adult` | `forum_adult` — forum dla dorosłych; `forum_teen` — forum dla dzieci i młodzieży. Klucz musi mieć dostęp do wybranego profilu. |
 | Gdy brak werdyktu | fail-closed | Co zrobić z komentarzem bez werdyktu: **fail-open** — opublikować, **fail-closed** — zostawić do ręcznej moderacji. Patrz niżej. |
-| Czas oczekiwania na werdykt | 20 min (od 20 do 1440) | Po tym czasie komentarz bez werdyktu trafia do trybu „Gdy brak werdyktu”. Brama próbuje doręczyć werdykt do chwili krótko przed upływem 15 minut od przyjęcia komentarza (przy domyślnych ustawieniach bramy ok. 12 minut), stąd najmniej 20 minut. Werdykt, który nadejdzie później, jest stosowany do komentarza opublikowanego przy fail-open (patrz niżej). |
+| Czas oczekiwania na werdykt | 20 min (od 20 do 1440) | Po tym czasie komentarz bez werdyktu trafia do trybu „Gdy brak werdyktu”. Brama próbuje doręczyć werdykt do chwili krótko przed upływem 15 minut od przyjęcia komentarza (przy domyślnych ustawieniach bramy ok. 12 minut), stąd najmniej 20 minut. Werdykt, który nadejdzie później, jest stosowany do komentarza opublikowanego przy fail-open (patrz niżej); komentarz wstrzymany przy fail-closed zostaje w moderacji i czeka na decyzję człowieka. |
 | Komentarz ocenzurowany | opublikuj wersję zamaskowaną | Opublikować tekst z fragmentami zastąpionymi znakami `█` albo zostawić komentarz do ręcznej moderacji. Oryginał zostaje zachowany w danych komentarza. Komentarz dłuższy niż 3000 znaków, komentarz z formatowaniem lub odnośnikami i komentarz, którego wersja zamaskowana nie pasuje do wysłanego tekstu, zawsze zostaje do moderacji (z wersją zamaskowaną w kolumnie **Minos**). |
 | Komentarz zablokowany | zostaw do ręcznej moderacji | Zostawić do moderacji albo oznaczyć jako spam. Komentarz z sygnałem wsparcia zawsze zostaje do moderacji (patrz „Sygnał wsparcia”). |
 | Pokazuj informację | włączona | Informacja pod formularzem komentarza (RODO), patrz niżej. |
@@ -137,7 +137,9 @@ Zasady, które obowiązują zawsze:
   tego, jeśli w międzyczasie ktoś zmienił status komentarza; edycję opisuje rozdział
   „Edycja komentarza”. Komentarz z sygnałem wsparcia zostaje opublikowany (przy
   ustawieniu „opublikuj wersję zamaskowaną” — w wersji zamaskowanej, jeśli ta pasuje),
-  a decyzję podejmuje moderator.
+  a decyzję podejmuje moderator. Przy fail-closed spóźniony werdykt nie zmienia
+  komentarza, który po upływie czasu oczekiwania został w moderacji: nawet „bezpieczne”
+  go nie publikuje, decyduje moderator (zapisywany jest tylko ewentualny sygnał wsparcia).
 - **Werdykt dotyczy tylko wysłanego tekstu.** Przed zastosowaniem każdego werdyktu wtyczka
   sprawdza, czy komentarz nadal ma tekst, który wysłała do oceny. Jeśli nie, werdykt nie
   jest stosowany, a komentarz zostaje wstrzymany i wysłany ponownie.
@@ -186,7 +188,8 @@ tekstu komentarza (np. znaczniki tak złożone, że przekraczają limit wyraże�
 PHP) — wtedy nie wysyła niczego w jego miejsce, nawet odczytanej części, a kolumna
 **Minos** podaje powód „nie udało się odczytać całego tekstu komentarza”. Wtedy:
 
-- **fail-closed** (domyślnie) — komentarz zostaje do ręcznej moderacji;
+- **fail-closed** (domyślnie) — komentarz zostaje do ręcznej moderacji (także gdy werdykt
+  nadejdzie po czasie oczekiwania — patrz „Spóźniony werdykt”);
 - **fail-open** — komentarz zostaje opublikowany (o ile WordPress sam by go opublikował).
 
 **Ponawianie.** Gdy brama każe poczekać — odmowa HTTP 429 (limit minutowy, dzienny lub

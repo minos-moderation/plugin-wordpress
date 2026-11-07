@@ -182,6 +182,22 @@ final class TextTest extends PluginTestCase
             'still only the attribute itself, not one whose name ends with it');
     }
 
+    /**
+     * Shared rule F7: what a reader sees is text, though no word is in it. Punctuation alone
+     * and a bare address are sent; the address is counted as a link with its domain.
+     */
+    public function testVisiblePunctuationAndABareAddressAloneAreText(): void
+    {
+        $this->configure();
+        foreach ([':)', '|---|', 'https://kasyno.example/bonus'] as $content) {
+            WpStub::$requests = [];
+            $id = $this->post($content);
+            $item = $this->sentBody()['elementy'][0];
+            self::assertSame([$content, true], [$item['tekst'], $this->pending($id)], $content);
+        }
+        self::assertSame([1, ['kasyno.example']], [$item['meta']['links'], $item['meta']['link_domains']]);
+    }
+
     public function testAQuotedWordIsSentApartFromTheNextOne(): void
     {
         $this->configure();

@@ -143,6 +143,11 @@ final class LateVerdictTest extends PluginTestCase
         // An edit is not a decision on a comment that was never assessed: RevisionTest.
     }
 
+    /**
+     * Shared rule A6 is a deviation here (`odstępstwo`, minos-moderation/minos#136): a late
+     * verdict for a comment the failure mode held after the timeout is not applied, so even
+     * `bezpieczne` leaves it held for a person. The phpBB and MyBB plugins apply it.
+     */
     public function testAFailClosedTimeoutIsNotReopenedByALateVerdict(): void
     {
         $this->configure(['failure_mode' => Settings::FAIL_CLOSED]);

@@ -184,7 +184,7 @@ final class Text
     /**
      * Whether the comment has text of its own that a reader sees: {@see ownText} with
      * something left once every invisible character ({@see INVISIBLE}) is removed. Without
-     * it the comment has no text to assess (shared rules D9.5, F7): a zero-width space in a
+     * it the comment has no text to assess (shared rule F7): a zero-width space in a
      * blank link or beside an image is not text, and must not carry an `alt` or a `title`
      * to the gateway. When the check cannot run (a PCRE limit) the answer is yes: the
      * comment is sent, more text and never less. What is sent stays {@see plain}.

@@ -8,7 +8,8 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * The rules for Claude Code sessions stay findable and cheap: the root `CLAUDE.md`, read by
- * every session, keeps to a size budget and names every scoped file, and every project
+ * every session, keeps to a size budget, names every scoped file and the shared plugin
+ * rules (D1), and every project
  * agent pins its model. A read-only agent lists its tools, so it cannot inherit Edit and
  * Write. A Sonnet agent that edits files works from a list of allowed paths, so its "Risk
  * list" block must name the paths it may not touch (the receiver, the submission, every
@@ -61,6 +62,21 @@ final class ClaudeRulesTest extends TestCase
         $size = strlen((string)file_get_contents(self::ROOT . '/CLAUDE.md'));
         self::assertLessThanOrEqual(self::ROOT_LIMIT, $size,
             'move a rule that one directory needs into that directory\'s CLAUDE.md');
+    }
+
+    public function testTheRootFilePointsAtTheSharedPluginRules(): void
+    {
+        // Shared plugin rule D1: one line names where the rules are and who decides a change.
+        $root = (string)file_get_contents(self::ROOT . '/CLAUDE.md');
+        $pointers = array_values(array_filter((array)preg_split('/\n(?=- |\n)/', $root),
+            static function (string $bullet): bool {
+                return strpos($bullet, '`docs/plugin-behaviour.md`') !== false;
+            }));
+        self::assertCount(1, $pointers, 'one line of CLAUDE.md names docs/plugin-behaviour.md (D1)');
+        $pointer = (string)preg_replace('/\s+/', ' ', $pointers[0]);
+        self::assertStringContainsString('`minos-moderation/client-php`', $pointer);
+        self::assertStringContainsString('a decision for every plugin', $pointer);
+        self::assertStringContainsString('`docs/development.md`', $pointer);
     }
 
     public function testEveryScopedFileStaysWithinItsBudgetAndIsNamedInTheRoot(): void

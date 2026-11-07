@@ -12,6 +12,9 @@ the gateway delivers to a signed webhook. Part of Minos; its backlog item is
 - The contract is `docs/contract.md` in `minos-moderation/client-php`; its receiving
   checklist is binding: read the raw body first, verify the signature, drop repeated
   deliveries, answer 2xx fast.
+- The shared plugin rules (F1…D2) are `docs/plugin-behaviour.md` in
+  `minos-moderation/client-php`; a change to one rule is a decision for every plugin, not
+  for this one. Their compliance table: `docs/development.md`.
 - A PHP plugin bundles `minos-moderation/client-php` at a pinned version and never forks
   its verification. The pin is a tag (`^0.2`, the lock at `v0.2.0`): move it only in a
   PR with a reviewed `composer update` to a newer tag.

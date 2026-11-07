@@ -322,7 +322,7 @@ included, which its next tag carries; the lock is at `v0.2.0`.
 | `A8` | the plugin's own data (the original, the verdicts) is kept 30 days; the platform's records follow the forum's rules | `Retention`, hourly, also while switched off, 30 days after `_minos_decided_at`; the README names what stays (the comment, its masked version) and that deactivation pauses it (`RetentionTest::testTheDataOfASettledCommentGoesThirtyDaysAfterItWasSettled`, `testItRunsWhileModerationIsOffAndAtMostABatchARun`, `QueryTest::testRetentionComparesTheSettlementMomentAsANumber`) |
 | `P1` | the archive carries no lock file, tests or mock, and pins the client | `bin/build-zip.sh` and `.github/scripts/check-release-archive.sh`, run by the `release-archive` job of `tests.yml` on every pull request and by `release.yml`; `composer.lock` pins the client's tag `v0.2.0` ("The client dependency") |
 | `D1` | this file is the one source; `CLAUDE.md` points at it, `docs/development.md` maps it | this table maps every identifier. odstępstwo: `CLAUDE.md` does not yet say in one line that the rules are client-php's `docs/plugin-behaviour.md` and that a change to one is a decision for every plugin (a change of `CLAUDE.md` is left to the owner; minos-moderation/minos#136) |
-| `D2` | shared compliance scenarios in `scenarios/` | nothing to run yet: client-php ships no `scenarios/` (neither `v0.2.0` nor `main`), as the rule says the first ones come in changes of their own; the unit harness (`PluginTestCase`) runs them once they ship |
+| `D2` | shared compliance scenarios in `scenarios/` | odstępstwo: client-php has no scenarios yet (`v0.2.0` ships none, nor does `main`), so the harness has none to run; minos-moderation/minos#44, step 5 |
 
 ## WordPress APIs
 

@@ -281,8 +281,8 @@ The rules every Minos plugin shares are client-php's `docs/plugin-behaviour.md`;
 entries above say how this plugin carries them out. This table maps every identifier to
 this plugin's mechanism and the tests that prove it, to `odstępstwo: …` with the issue
 that closes it, or, for the optional F5d, to `nie wdrożono, reguła opcjonalna` (D1). It
-follows the rules as client-php's `main` states them, F10 and the 2026-11-05 wording
-included, which its next tag carries; the lock is at `v0.2.0`.
+follows the rules as client-php's tag `v0.2.1` states them, F10 and the 2026-11-05 wording
+included; the lock is at that tag.
 
 | Id | In short | WordPress: mechanism, or deviation |
 |---|---|---|
@@ -320,9 +320,9 @@ included, which its next tag carries; the lock is at `v0.2.0`.
 | `A6` | a late verdict also applies to a post the failure mode held | odstępstwo: under fail-closed the receive timeout settles the comment as `nieocenione` (`Outcome::timedOut`), and `Outcome::awaitsVerdict` accepts only a waiting comment or a fail-open publication, so a late verdict for a comment the failure mode held records only its `wsparcie` (A7) and the comment waits for a person (`LateVerdictTest::testAFailClosedTimeoutIsNotReopenedByALateVerdict`); the phpBB and MyBB plugins apply it as if it came in time. The safe direction: nothing is published without a verdict or a person. Kept for 0.1.0, minos-moderation/minos#136 (the fix: `awaitsVerdict` also for `nieocenione` with `_minos_timed_out` on a comment of the current revision still held, the on-time path for it, and no second moderator's e-mail for a late `nieocenione`) |
 | `A7` | `wsparcie` is an active signal for moderators, also after a person's decision, never an automatic removal; a mask is still published | "The support cue" above: the "Minos" column and the comments screen's notice, the moderator's e-mail for a held comment, never spam or unpublished by the plugin, recorded after a decision too (`ReceiverTest::testABlockedCommentWithTheSupportCueIsHeldNeverMarkedAsSpam`, `testTheModeratorsEmailWithTheSupportCueNeverGoesToTheCommentsAuthor`, `LateVerdictTest::testALateVerdictWithTheSupportCueLeavesThePublicationInPlace`, `testALateSupportCueAfterAModeratorsApprovalIsASignalAndNothingElse`, `testTheSupportCueOfAnEarlierRevisionKeepsALaterFailOpenPublicationPublished`, `EndToEndTest::testALateSupportCueAfterAModeratorsApprovalIsRecordedOnceOverHttp`) |
 | `A8` | the plugin's own data (the original, the verdicts) is kept 30 days; the platform's records follow the forum's rules | `Retention`, hourly, also while switched off, 30 days after `_minos_decided_at`; the README names what stays (the comment, its masked version) and that deactivation pauses it (`RetentionTest::testTheDataOfASettledCommentGoesThirtyDaysAfterItWasSettled`, `testItRunsWhileModerationIsOffAndAtMostABatchARun`, `QueryTest::testRetentionComparesTheSettlementMomentAsANumber`) |
-| `P1` | the archive carries no lock file, tests or mock, and pins the client | `bin/build-zip.sh` and `.github/scripts/check-release-archive.sh`, run by the `release-archive` job of `tests.yml` on every pull request and by `release.yml`; `composer.lock` pins the client's tag `v0.2.0` ("The client dependency") |
+| `P1` | the archive carries no lock file, tests or mock, and pins the client | `bin/build-zip.sh` and `.github/scripts/check-release-archive.sh`, run by the `release-archive` job of `tests.yml` on every pull request and by `release.yml`; `composer.lock` pins the client's tag `v0.2.1` ("The client dependency") |
 | `D1` | this file is the one source; `CLAUDE.md` points at it, `docs/development.md` maps it | `CLAUDE.md` (one line), this table; `tests/Repo/ClaudeRulesTest.php` |
-| `D2` | shared compliance scenarios in `scenarios/` | odstępstwo: client-php has no scenarios yet (`v0.2.0` ships none, nor does `main`), so the harness has none to run; minos-moderation/minos#44, step 5 |
+| `D2` | shared compliance scenarios in `scenarios/` | odstępstwo: client-php has no scenarios yet (`v0.2.1` ships none, nor does `main`), so the harness has none to run; minos-moderation/minos#44, step 5 |
 
 ## WordPress APIs
 
@@ -463,7 +463,7 @@ JSON on disk: never send real comments to it.
 `composer.json` requires `minos-moderation/client-php` at `^0.2` from its GitHub
 repository (a `vcs` repository entry: the client is not on Packagist); `composer.lock` pins
 the exact tag and commit, so a build is reproducible. The lock IS the pin: the client's
-tag `v0.2.0`, commit `e5df7d6`. Moving to a newer client is a pull request of its own
+tag `v0.2.1`, commit `56d5780`. Moving to a newer client is a pull request of its own
 with a reviewed `composer update minos-moderation/client-php` to a tag (widen the
 constraint first when the tag is outside `^0.2`), and the lock diff shows only that
 package's entry and the content hash. Never pin a commit of the client's `main`. The

@@ -620,6 +620,29 @@ final class FailureIsolationTest extends PluginTestCase
     }
 
     /**
+     * A write the database refuses after the status was written, in the author's request:
+     * the comment is left to WordPress and a person, not marked as waiting where the sweep
+     * never finds it. WordPress's own e-mail to the moderator goes out, and nothing is sent.
+     */
+    public function testAWriteRefusedAfterTheStatusLeavesTheCommentToTheModerator(): void
+    {
+        $this->configure(['failure_mode' => Settings::FAIL_OPEN]);
+        $this->ids = [0, 0];
+        $next = WpStub::$comments === [] ? 1 : max(array_keys(WpStub::$comments)) + 1;
+        $this->refuseMeta($next, Meta::WAITING);
+
+        $this->ids[1] = $this->post('Komentarz, którego znacznika oczekiwania baza nie zapisała.');
+
+        self::assertSame($next, $this->ids[1]);
+        self::assertSame(['0', null, null], [$this->field($this->ids[1], 'comment_approved'),
+            $this->field($this->ids[1], Meta::STATUS), $this->field($this->ids[1], Meta::WAITING)]);
+        self::assertSame([], WpStub::$requests);
+        $this->assertLoggedOnce(Log::STEP_SUBMIT);
+        wp_new_comment_notify_moderator($this->ids[1]);
+        self::assertContains(['moderator', $this->ids[1]], WpStub::$emails, 'not silenced as one waiting for its verdict');
+    }
+
+    /**
      * An update whose write the database refused runs on `init`: nothing escapes, the data
      * version stays, and the next request runs the steps again.
      */

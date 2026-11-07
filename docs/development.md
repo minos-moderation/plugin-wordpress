@@ -237,7 +237,10 @@ Decisions worth knowing before changing anything:
   `false` means an unchanged value, so the value is read back first). Where no step
   isolates it, in a person's request (the author's `comment_post`, an `edit_comment`, a
   `transition_comment_status`) and in `Upgrade` on `init`, it is caught there: the comment
-  stays held, and an upgrade runs again on the next request. The stubbed
+  stays held, and an upgrade runs again on the next request. A comment whose marks could not
+  all be written in the author's request loses them (`Submission::forget`): left with
+  `oczekuje` but without `_minos_waiting`, the sweep would never find it, and WordPress's
+  e-mail to the moderator would stay held back; without them a person decides on it. The stubbed
   `update_comment_meta` runs core's `update_comment_metadata` short-circuit, so a test can
   refuse one write.
 - **Slashes.** `wp_update_comment` and `update_comment_meta` unslash their input, so

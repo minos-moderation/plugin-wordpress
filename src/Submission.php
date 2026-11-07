@@ -655,11 +655,33 @@ final class Submission
             $this->wp->setMeta($id, Meta::HELD_AT, $this->wp->now());
             $this->wp->setMeta($id, Meta::WP_APPROVED, $wordpress);
         } catch (\Throwable $e) {
-            // In the author's request: nothing escapes. The comment stays held for a person.
+            // In the author's request: nothing escapes. The comment stays held for a person,
+            // as one the plugin does not moderate: a status left `oczekuje` without the keys
+            // the sweep finds it by would wait for ever, and keep WordPress's e-mail to the
+            // moderator held back ({@see Outcome::filterNotifyModerator}).
             $this->outcome->failed(Log::STEP_SUBMIT, $id);
+            $this->forget($id);
             return;
         }
         $this->submitIsolated($id);
+    }
+
+    /**
+     * Removes the marks {@see start} wrote, so a comment it could not start is left to
+     * WordPress and a person. It never throws.
+     *
+     * @param int $id The comment.
+     * @return void
+     */
+    private function forget(int $id): void
+    {
+        foreach ([Meta::STATUS, Meta::WAITING, Meta::HELD_AT, Meta::WP_APPROVED] as $key) {
+            try {
+                $this->wp->deleteMeta($id, $key);
+            } catch (\Throwable $e) {
+                // Nothing more can be done here.
+            }
+        }
     }
 
     /**

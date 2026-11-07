@@ -251,6 +251,17 @@ Decisions worth knowing before changing anything:
   once the limit renews): not implemented, an optional rule (off by default where a
   plugin has it), so not a deviation.
 
+## The shared rules
+
+The rules every Minos plugin shares are client-php's `docs/plugin-behaviour.md`; the
+entries above say how this plugin carries them out. This table names, for a rule, this
+plugin's mechanism and the test that proves it, or a deviation (`odstępstwo: …`). So far
+it maps `F10`; the entries above name the other rules where they are carried out.
+
+| Id | In short | WordPress: mechanism, or deviation |
+|---|---|---|
+| `F10` | the receiver answers `2xx` only for a stored verdict; a platform page in its place must be a non-`2xx` | odstępstwo: a store that fails without an exception still answers `200`. `Receiver::handle` answers `500` only when applying throws (`FailureIsolationTest::testAWebhookThatFailsAnswers500AndTheRedeliveryIsApplied`); `Platform::setMeta` drops `update_comment_meta`'s result, so a database write of `_minos_status` that fails in `Outcome::settle` (wpdb answers `false`, no exception) ends in `200` while `_minos_status` still says `oczekuje`: the gateway counts the verdict as delivered and the plugin has not recorded it (to be fixed after the whole-project review). A repeat, another revision or an unknown comment answers `200` with nothing to store (`ReceiverTest::testARepeatedDeliveryIs200AndChangesNothing`, `testAnUnknownIdIs200AndChangesNothing`, `RevisionTest::testAVerdictForAnotherRevisionIs200AndChangesNothing`). The platform's page: WordPress's maintenance mode answers before any plugin loads, with `503` (`tests/Integration/MaintenanceTest.php`); a site's own `wp-content/maintenance.php` sends its own code, and the README tells the administrator it must answer `503` |
+
 ## WordPress APIs
 
 Checked against the WordPress sources at the `6.0` and `7.1.2` tags
@@ -335,8 +346,8 @@ built-in server for the end-to-end test.
   to pass moves the moments the plugin stored back. One test at least for each of: the
   double `pre_comment_approved`, kses and the stored `comment_content` with the column's
   limit, `wp_set_comment_status` / `wp_update_comment` / `transition_comment_status` and
-  the e-mails sent in the webhook's request, the REST route with the raw body, WP-Cron's
-  duplicate refusal, `get_comments` with meta and date queries, and uninstalling. To run
+  the e-mails sent in the webhook's request, the REST route with the raw body, the
+  maintenance mode's `503` (`MaintenanceTest`), WP-Cron's duplicate refusal, `get_comments` with meta and date queries, and uninstalling. To run
   it, with a MySQL server and a user that may create the database:
 
   ```bash
@@ -384,15 +395,14 @@ JSON on disk: never send real comments to it.
 
 ## The client dependency
 
-`composer.json` requires `minos-moderation/client-php` at `dev-main` from its GitHub
-repository (a `vcs` repository entry); `composer.lock` pins the exact commit, so a build is
-reproducible. The lock IS the pin: commit `fc4beb7` of the client's `main`, from before
-the client's first release. The client has no release tag yet; its first two are to stand
-at `7d58a76` (`v0.1.0`) and `e5df7d6` (`v0.2.0`, which only adds to 0.1.0). The plugin
-moves to them in a pull request of its own: replace `dev-main` with `^0.2`, run
-`composer update minos-moderation/client-php` and commit the lock. Until then, move the
-pin only with the same update at a reviewed commit of the client's `main`. The plugin
-never forks the client's verification.
+`composer.json` requires `minos-moderation/client-php` at `^0.2` from its GitHub
+repository (a `vcs` repository entry: the client is not on Packagist); `composer.lock` pins
+the exact tag and commit, so a build is reproducible. The lock IS the pin: the client's
+tag `v0.2.0`, commit `e5df7d6`. Moving to a newer client is a pull request of its own
+with a reviewed `composer update minos-moderation/client-php` to a tag (widen the
+constraint first when the tag is outside `^0.2`), and the lock diff shows only that
+package's entry and the content hash. Never pin a commit of the client's `main`. The
+plugin never forks the client's verification.
 
 `config.platform-check` is off: WordPress's `Requires PHP: 7.4` header already refuses
 older hosts, and Composer's check would stop the whole site instead.

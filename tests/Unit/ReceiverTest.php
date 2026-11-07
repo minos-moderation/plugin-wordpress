@@ -236,7 +236,7 @@ final class ReceiverTest extends PluginTestCase
             'one character short'  => ['Tekst z ███████ słowem testowym.'],
             'one character long'   => ['Tekst z █████████ słowem testowym.'],
             'a foreign character'  => ['Tekst z ████████ słowem testowym!'],
-            'a link in its place'  => ['Tekst z https://a.ex słowem testowym.'],
+            'a link in its place'  => ['Tekst z https://a.ex █ słowem testowym.'],
             'another text'         => ['Zupełnie inny tekst, dłuższy, z linkiem https://obcy.example ███'],
         ];
     }
@@ -257,6 +257,27 @@ final class ReceiverTest extends PluginTestCase
         self::assertSame($original, $this->field($id, 'comment_content'));
         self::assertNull($this->field($id, Meta::ORIGINAL));
         self::assertSame($masked, $this->field($id, Meta::MASKED));
+        self::assertNotContains([$id, 'approve'], WpStub::$statusChanges);
+    }
+
+    /**
+     * A masked text with no `█` masks nothing: the client (0.2.0) reads it as absent, so
+     * the comment is held as for a missing one, and nothing is kept as a mask.
+     */
+    public function testAnUnmaskedCensoredTextIsHeldAndKeptAsNoMask(): void
+    {
+        $this->configure(['censored_mode' => Settings::CENSORED_PUBLISH]);
+        $original = 'Tekst z brzydkim słowem testowym.';
+        $id = $this->post($original);
+        $unmasked = 'Tekst z https://a.ex słowem testowym.';
+        self::assertStringNotContainsString('█', $unmasked);
+
+        self::assertSame(200, $this->deliver(self::verdict($id, 'ocenzurowane', ['ocenzurowany' => $unmasked])));
+
+        self::assertSame('0', $this->field($id, 'comment_approved'));
+        self::assertSame($original, $this->field($id, 'comment_content'));
+        self::assertNull($this->field($id, Meta::ORIGINAL));
+        self::assertNull($this->field($id, Meta::MASKED));
         self::assertNotContains([$id, 'approve'], WpStub::$statusChanges);
     }
 

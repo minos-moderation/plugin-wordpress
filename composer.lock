@@ -4,20 +4,20 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "51ccde5ffb800c101c90ec0cd1521b86",
+    "content-hash": "9115acc5c56911ab0a65cfb267b05821",
     "packages": [
         {
             "name": "minos-moderation/client-php",
-            "version": "dev-main",
+            "version": "v0.2.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/minos-moderation/client-php.git",
-                "reference": "fc4beb7625c9119315a560fd04c4c2e49e49f6ae"
+                "reference": "e5df7d6da76e4327838202f9325c5da8455820b9"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/minos-moderation/client-php/zipball/fc4beb7625c9119315a560fd04c4c2e49e49f6ae",
-                "reference": "fc4beb7625c9119315a560fd04c4c2e49e49f6ae",
+                "url": "https://api.github.com/repos/minos-moderation/client-php/zipball/e5df7d6da76e4327838202f9325c5da8455820b9",
+                "reference": "e5df7d6da76e4327838202f9325c5da8455820b9",
                 "shasum": ""
             },
             "require": {
@@ -29,7 +29,6 @@
                 "ext-mbstring": "*",
                 "phpunit/phpunit": "^9.6"
             },
-            "default-branch": true,
             "type": "library",
             "autoload": {
                 "psr-4": {
@@ -52,10 +51,10 @@
             ],
             "description": "The PHP client of the Wergiliusz gateway's B2B API for Minos forum plugins: webhook signature verification, payload reading, and a mock gateway for development",
             "support": {
-                "source": "https://github.com/minos-moderation/client-php/tree/main",
+                "source": "https://github.com/minos-moderation/client-php/tree/v0.2.0",
                 "issues": "https://github.com/minos-moderation/client-php/issues"
             },
-            "time": "2026-09-30T14:15:54+00:00"
+            "time": "2026-10-28T11:58:30+00:00"
         }
     ],
     "packages-dev": [
@@ -1905,9 +1904,7 @@
     ],
     "aliases": [],
     "minimum-stability": "stable",
-    "stability-flags": {
-        "minos-moderation/client-php": 20
-    },
+    "stability-flags": {},
     "prefer-stable": false,
     "prefer-lowest": false,
     "platform": {

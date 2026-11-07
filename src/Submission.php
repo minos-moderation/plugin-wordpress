@@ -535,7 +535,14 @@ final class Submission
             return null;
         }
         $content = (string)$comment->comment_content;
-        if (Text::cut(Text::plain($content)) === '' || !Text::hasOwnText($content)) {
+        $plain = Text::extract($content);
+        if ($plain === null) {
+            // Read only in part: what would go is not what a reader sees, and nothing goes
+            // in its place - the failure mode at once (shared rules F7, S1), with the reason.
+            $this->outcome->withoutVerdict($id, Meta::ERROR_UNREADABLE);
+            return null;
+        }
+        if (Text::cut($plain) === '' || !Text::hasOwnText($content)) {
             // Nothing to assess (a link with a blank text, an image with or without its
             // alternative text and nothing else, invisible characters included): no request,
             // no verdict, no guess - the failure mode at once (shared rules D9.5, F7), with

@@ -4,14 +4,17 @@ declare(strict_types=1);
 
 namespace Minos\WordPress\Tests\Unit;
 
+use Minos\WordPress\Admin\CommentsScreen;
 use Minos\WordPress\Meta;
 use Minos\WordPress\Settings;
 use Minos\WordPress\Text;
+use WpStub;
 
 /**
  * The plain text never goes empty for a text that has one: an empty text gets the failure
  * mode, and fail-open would publish it unassessed. Whitespace is trimmed without a regex,
- * so neither a PCRE limit nor a long run of spaces can empty it.
+ * so neither a PCRE limit nor a long run of spaces can empty it. A text a regex could read
+ * only in part is never sent in place of the whole: the failure mode, with its reason.
  */
 final class TextTest extends PluginTestCase
 {
@@ -42,9 +45,6 @@ final class TextTest extends PluginTestCase
             '2000 interior NBSPs'      => ['INSULT' . str_repeat("\u{A0}", 2000) . 'koniec'],
             '3000 trailing spaces'     => ['INSULT' . str_repeat(' ', 3000)],
             'mixed interior runs'      => [str_repeat("INSULT \u{3000}\t ", 400) . 'koniec'],
-            // These make the other two regexes of plain() give up at the limit.
-            'unclosed script tags'     => [str_repeat('<script>INSULT ', 200)],
-            'a tag of 2000 attributes' => ['<abbr' . str_repeat(' t="x"', 2000) . '>INSULT</abbr>'],
         ];
     }
 
@@ -67,6 +67,49 @@ final class TextTest extends PluginTestCase
         self::assertStringStartsWith('INSULT', $this->sentBody()['elementy'][0]['tekst']);
         self::assertTrue($this->pending($id), 'sent for assessment, not given the failure mode');
         self::assertSame('0', $this->field($id, 'comment_approved'));
+    }
+
+    /**
+     * @return array<string,array{0:string,1:string}>
+     */
+    public static function partReads(): array
+    {
+        return [
+            // Each makes one regex of extract() give up at the limit.
+            'unclosed script tags'     => [str_repeat('<script>INSULT ', 200), Settings::FAIL_CLOSED],
+            'a tag of 2000 attributes' => ['<abbr' . str_repeat(' t="x"', 2000) . '>INSULT</abbr>', Settings::FAIL_CLOSED],
+            'the same under fail-open' => [str_repeat('<script>INSULT ', 200), Settings::FAIL_OPEN],
+            'not valid UTF-8'          => ["Komentarz \xC3\x28 testowy", Settings::FAIL_CLOSED],
+        ];
+    }
+
+    /**
+     * Shared rules F7 and S1: a text read only in part is not sent in place of the whole
+     * (a `script`'s content the reader never sees, or attribute text left out). The comment
+     * gets the failure mode at once, without a request, and the column says why.
+     *
+     * @dataProvider partReads
+     */
+    public function testATextReadOnlyInPartGetsTheFailureModeAndNothingIsSent(string $content, string $mode): void
+    {
+        $this->configure(['failure_mode' => $mode]);
+        $limit = ini_get('pcre.backtrack_limit');
+        ini_set('pcre.backtrack_limit', '1000');
+        try {
+            $unreadable = Text::extract($content);
+            $id = $this->post($content);
+        } finally {
+            ini_set('pcre.backtrack_limit', (string)$limit);
+        }
+
+        self::assertNull($unreadable, 'the case must make the reading fail, or it proves nothing');
+        self::assertSame([], WpStub::$requests, 'nothing sent in its place');
+        self::assertSame([Meta::UNASSESSED, Meta::ERROR_UNREADABLE], [$this->field($id, Meta::STATUS), $this->field($id, Meta::ERROR)]);
+        self::assertSame($mode === Settings::FAIL_OPEN ? '1' : '0', $this->field($id, 'comment_approved'));
+        ob_start();
+        (new CommentsScreen($this->plugin->wp, $this->plugin->settings, $this->plugin->log))
+            ->renderColumn(CommentsScreen::COLUMN, $id);
+        self::assertStringContainsString('nie udało się odczytać', (string)ob_get_clean(), 'the moderator sees why');
     }
 
     public function testABlockBoundarySeparatesWordsAndAnInlineTagJoinsNone(): void

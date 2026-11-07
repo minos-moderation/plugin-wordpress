@@ -181,7 +181,10 @@ obrazek — także z opisem `alt` lub `title`, bo brama nie ocenia obrazów, a w
 opisie dotyczyłby czegoś, czego nie widziała; niewidoczne znaki, np. spacja o zerowej
 szerokości albo samotny znak łączący bez litery, do której mógłby się dołączyć, nie są
 tekstem (litera z akcentem nim jest); taki komentarz nie jest wysyłany, a kolumna
-**Minos** podaje powód „brak tekstu do oceny”). Wtedy:
+**Minos** podaje powód „brak tekstu do oceny”), albo gdy wtyczka nie zdoła odczytać całego
+tekstu komentarza (np. znaczniki tak złożone, że przekraczają limit wyrażeń regularnych
+PHP) — wtedy nie wysyła niczego w jego miejsce, nawet odczytanej części, a kolumna
+**Minos** podaje powód „nie udało się odczytać całego tekstu komentarza”. Wtedy:
 
 - **fail-closed** (domyślnie) — komentarz zostaje do ręcznej moderacji;
 - **fail-open** — komentarz zostaje opublikowany (o ile WordPress sam by go opublikował).

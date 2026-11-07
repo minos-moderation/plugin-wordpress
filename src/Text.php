@@ -108,21 +108,51 @@ final class Text
      * word would go unassessed.
      *
      * @param string $html The stored comment content.
-     * @return string The text, or '' when the content is not valid UTF-8.
+     * @return string The text, or '' when it cannot be read whole ({@see extract}).
      */
     public static function plain(string $html): string
     {
+        return self::extract($html) ?? '';
+    }
+
+    /**
+     * {@see plain}, or null when the text cannot be read whole: the content is not valid
+     * UTF-8, or one of the regexes gives up (a PCRE limit returns null). A text read in part
+     * is never sent in place of the whole (shared rules F7, S1): skipping a step would send
+     * what a reader never sees (the content of a `script`) or less than they see (attribute
+     * text dropped, two words joined at a block boundary), so such a comment gets the
+     * failure mode instead.
+     *
+     * @param string $html The stored comment content.
+     * @return string|null The text, or null when it cannot be read whole.
+     */
+    public static function extract(string $html): ?string
+    {
         if (preg_match('//u', $html) !== 1) {
-            return '';
+            return null;
         }
-        // A regex that gives up (a PCRE limit) returns null: then the step is skipped and
-        // more text is assessed, never less — an empty text would get the failure mode.
-        $text = preg_replace('@<(script|style)[^>]*?>.*?</\\1>@si', '', $html) ?? $html;
-        $text = preg_replace_callback(self::TAG, [self::class, 'attributeText'], $text) ?? $text;
+        $text = preg_replace('@<(script|style)[^>]*?>.*?</\\1>@si', '', $html);
+        if ($text === null) {
+            return null;
+        }
+        $failed = false;
+        $text = preg_replace_callback(self::TAG, static function (array $match) use (&$failed): string {
+            $texts = self::attributeText($match);
+            if ($texts === null) {
+                $failed = true;
+                return $match[0];
+            }
+            return $texts;
+        }, $text);
+        if ($text === null || $failed) {
+            return null;
+        }
         // After the attribute text, which a block tag with a `title` keeps in its place.
-        $text = preg_replace(self::BLOCK, "\n", $text) ?? $text;
-        $text = html_entity_decode(strip_tags($text), ENT_QUOTES | ENT_HTML5, 'UTF-8');
-        return self::trim($text);
+        $text = preg_replace(self::BLOCK, "\n", $text);
+        if ($text === null) {
+            return null;
+        }
+        return self::trim(html_entity_decode(strip_tags($text), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
     }
 
     /**
@@ -139,7 +169,8 @@ final class Text
         if (preg_match('//u', $html) !== 1) {
             return '';
         }
-        // As in plain(): a regex that gives up leaves its input, so more text, never less.
+        // Asked once extract() read the whole text: a regex that gives up here leaves its
+        // input, so the comment counts as having text, never less.
         $text = preg_replace('@<(script|style)[^>]*?>.*?</\\1>@si', '', $html) ?? $html;
         $text = preg_replace(self::BLOCK, "\n", $text) ?? $text;
         return self::trim(html_entity_decode(strip_tags($text), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
@@ -346,15 +377,17 @@ final class Text
     }
 
     /**
-     * {@see plain}'s callback: a tag with `title` or `alt` text becomes that text between
+     * {@see extract}'s callback: a tag with `title` or `alt` text becomes that text between
      * spaces; any other tag is left for `strip_tags`.
      *
      * @param array<int,string> $match The tag.
-     * @return string The replacement.
+     * @return string|null The replacement, or null when the regex gave up.
      */
-    private static function attributeText(array $match): string
+    private static function attributeText(array $match): ?string
     {
-        preg_match_all(self::TEXT_ATTRIBUTE, $match[0], $attributes, PREG_SET_ORDER);
+        if (preg_match_all(self::TEXT_ATTRIBUTE, $match[0], $attributes, PREG_SET_ORDER) === false) {
+            return null;
+        }
         $texts = [];
         foreach ($attributes as $attribute) {
             $value = trim(($attribute[1] ?? '') . ($attribute[2] ?? '') . ($attribute[3] ?? ''));

@@ -145,4 +145,11 @@ final class Meta
      * `brak_tekstu`, which answers a request that carried an empty item.
      */
     public const ERROR_NO_TEXT = 'brak_tekstu_do_oceny';
+
+    /**
+     * {@see ERROR} when the comment's text could not be read whole ({@see Text::extract}: not
+     * valid UTF-8, or a PCRE limit): nothing was sent in its place, and the failure mode
+     * applied at once (shared rules F7, S1).
+     */
+    public const ERROR_UNREADABLE = 'tekst_nieodczytany';
 }

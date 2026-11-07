@@ -190,10 +190,17 @@ Decisions worth knowing before changing anything:
   mode at once, without a request, with `_minos_error` `brak_tekstu_do_oceny` (the plugin's
   own code, not the gateway's `brak_tekstu`) shown in the "Minos" column; under fail-open
   the publication is marked as one without an assessment.
-- **The plain text never goes empty by accident.** An empty text gets the failure mode,
-  so a regex in `Text` that gives up (a PCRE limit returns null) falls back to its input,
-  and trimming is a byte scan over the 26 characters PCRE calls whitespace, not a regex
-  (`\s+$` is quadratic over interior runs).
+- **A text read in part is never sent** (shared rules F7, S1). `Text::extract` answers
+  null when the content is not valid UTF-8 or one of its regexes gives up (a PCRE limit
+  returns null): the comment is held and gets the failure mode at once, without a request,
+  with `_minos_error` `tekst_nieodczytany` shown in the "Minos" column, because a step
+  skipped would send what a reader never sees (a `script`'s content) or less than they see
+  (attribute text dropped, two words joined at a block boundary). Trimming is a byte scan
+  over the 26 characters PCRE calls whitespace, not a regex (`\s+$` is quadratic over
+  interior runs), so a long run of spaces never makes a text unreadable. What is asked
+  only after the text was read whole still reads more when its regex gives up, never
+  less: `Text::ownText` and `hasOwnText` count the comment as having text, and the link
+  count and domains (`Text::links`) read the whole markup.
 - **A cut comment is never published by a verdict.** The gateway assessed only its first
   3000 characters: `bezpieczne` gets the failure mode, `ocenzurowane` is held.
 - **The masked text is plain text, and verified.** `Outcome` escapes it with

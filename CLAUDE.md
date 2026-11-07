@@ -16,7 +16,7 @@ the gateway delivers to a signed webhook. Part of Minos; its backlog item is
   `minos-moderation/client-php`; a change to one rule is a decision for every plugin, not
   for this one. Their compliance table: `docs/development.md`.
 - A PHP plugin bundles `minos-moderation/client-php` at a pinned version and never forks
-  its verification. The pin is a tag (`^0.2`, the lock at `v0.2.0`): move it only in a
+  its verification. The pin is a tag (`^0.2`, the lock at `v0.2.1`): move it only in a
   PR with a reviewed `composer update` to a newer tag.
   Never send an e-mail, IP address or author id.
 - Every WordPress call of the logic goes through `src/Platform.php`; tests stub those

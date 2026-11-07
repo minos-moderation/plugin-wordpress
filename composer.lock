@@ -8,16 +8,16 @@
     "packages": [
         {
             "name": "minos-moderation/client-php",
-            "version": "v0.2.0",
+            "version": "v0.2.1",
             "source": {
                 "type": "git",
                 "url": "https://github.com/minos-moderation/client-php.git",
-                "reference": "e5df7d6da76e4327838202f9325c5da8455820b9"
+                "reference": "56d5780f602c0f6ee434ec16affc2b9ccb3f6665"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/minos-moderation/client-php/zipball/e5df7d6da76e4327838202f9325c5da8455820b9",
-                "reference": "e5df7d6da76e4327838202f9325c5da8455820b9",
+                "url": "https://api.github.com/repos/minos-moderation/client-php/zipball/56d5780f602c0f6ee434ec16affc2b9ccb3f6665",
+                "reference": "56d5780f602c0f6ee434ec16affc2b9ccb3f6665",
                 "shasum": ""
             },
             "require": {
@@ -51,10 +51,10 @@
             ],
             "description": "The PHP client of the Wergiliusz gateway's B2B API for Minos forum plugins: webhook signature verification, payload reading, and a mock gateway for development",
             "support": {
-                "source": "https://github.com/minos-moderation/client-php/tree/v0.2.0",
+                "source": "https://github.com/minos-moderation/client-php/tree/v0.2.1",
                 "issues": "https://github.com/minos-moderation/client-php/issues"
             },
-            "time": "2026-10-28T11:58:30+00:00"
+            "time": "2026-11-07T11:45:01+00:00"
         }
     ],
     "packages-dev": [

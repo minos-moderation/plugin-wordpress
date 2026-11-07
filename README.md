@@ -309,11 +309,21 @@ z sygnałem w kolumnie **Minos**.
 Sygnał wsparcia działa zawsze, także w werdykcie, którego wtyczka już nie stosuje: gdy
 przychodzi po decyzji moderatora (komentarz zatwierdzony, wstrzymany, oznaczony jako spam,
 przeniesiony do kosza albo zmieniony), po zmianie treści komentarza albo po upływie czasu
-oczekiwania. Taki werdykt nie zmienia statusu ani treści komentarza i nie zapisuje
-kategorii — wtyczka zapisuje tylko sygnał wsparcia z dopiskiem, że nadszedł po decyzji
-moderatora, widoczny w kolumnie **Minos** i w powiadomieniu na liście komentarzy.
+oczekiwania. Taki werdykt nie zmienia statusu ani treści komentarza. Jeśli komentarz
+wciąż na niego czekał (moderator zdecydował, zanim werdykt nadszedł), wtyczka zapisuje
+werdykt i kategorie, jak mówi zasada „Decyzja człowieka wygrywa”; werdykt, na który
+komentarz już nie czeka (po upływie czasu oczekiwania, po zmianie treści, dla wcześniejszej
+wersji tekstu), nie zapisuje nawet kategorii. W obu przypadkach wtyczka zapisuje sygnał
+wsparcia z dopiskiem, że nadszedł po decyzji moderatora, widoczny w kolumnie **Minos**
+i w powiadomieniu na liście komentarzy.
 O komentarzu, który nadal jest wstrzymany, moderator dostaje też e-mail z informacją
 o sygnale. Powtórzone doręczenie tego samego werdyktu niczego nie dubluje.
+
+Sygnał dotyczy osoby, nie jednej wersji tekstu: komentarz, który dostał go w werdykcie dla
+wcześniejszej wersji, jest traktowany jak komentarz z sygnałem przy każdym następnym
+werdykcie. Świadomie także wtedy, gdy nowa wersja dostanie werdykt bez sygnału: spóźnione
+„zablokowane” nie zdejmuje ze strony jej publikacji przy fail-open, a „zablokowane” na czas
+zostawia ją do moderacji zamiast oznaczać jako spam — decyduje moderator.
 
 ## Dziennik i błędy
 

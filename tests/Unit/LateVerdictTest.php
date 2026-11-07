@@ -302,6 +302,37 @@ final class LateVerdictTest extends PluginTestCase
     }
 
     /**
+     * Shared rule A7, kept on purpose: the cue of an earlier revision is about the person,
+     * so it still counts when the next revision's late verdict comes without it. Under
+     * fail-open a late `zablokowane` for that revision leaves the publication in place
+     * (recorded, never held nor marked as spam), and a person decides.
+     */
+    public function testTheSupportCueOfAnEarlierRevisionKeepsALaterFailOpenPublicationPublished(): void
+    {
+        $this->configure(['failure_mode' => Settings::FAIL_OPEN, 'blocked_mode' => Settings::BLOCKED_SPAM]);
+        $id = $this->post('Pierwsza wersja komentarza testowego z sygnałem.');
+        wp_update_comment(['comment_ID' => $id, 'comment_content' => 'Druga wersja komentarza testowego z sygnałem.']);
+        self::assertSame(200, $this->deliver(self::verdict($id, 'bezpieczne', ['wsparcie' => true])));
+        self::assertSame(['1', Meta::PENDING, '1'], [$this->field($id, Meta::REVISION), $this->field($id, Meta::STATUS),
+            $this->field($id, Meta::SUPPORT)], 'the first text\'s cue is recorded, the second text waits');
+        $this->now += Settings::DEFAULT_TIMEOUT_MIN * 60;
+        do_action(Sweeper::HOOK);
+        self::assertSame(['1', '1'], [$this->field($id, 'comment_approved'), $this->field($id, Meta::AUTO_PUBLISHED)]);
+        $changes = WpStub::$statusChanges;
+        WpStub::$events = [];
+
+        $late = self::verdict($id, 'zablokowane', ['kategorie' => ['nekanie']]);
+        $late['id'] = Submission::itemId($id, 1);
+        self::assertSame(200, $this->deliver($late));
+
+        self::assertSame(['1', 'zablokowane', 'nekanie'], [$this->field($id, 'comment_approved'),
+            $this->field($id, Meta::STATUS), $this->field($id, Meta::CATEGORIES)], 'recorded, and still published');
+        self::assertSame($changes, WpStub::$statusChanges, 'neither held nor marked as spam');
+        self::assertNull($this->field($id, Meta::AUTO_PUBLISHED), 'settled: a repeat changes nothing');
+        self::assertSame([], self::events(Outcome::HOOK_NOTIFY));
+    }
+
+    /**
      * The same for a text changed without `edit_comment` (another plugin's direct write):
      * the receiver sends the next revision instead of applying the verdict, and records
      * its cue. A comment a person approved meanwhile keeps its status too.

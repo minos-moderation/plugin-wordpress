@@ -12,7 +12,7 @@
     "require": {
         "php": ">=7.4",
         "ext-json": "*",
-        "minos-moderation/client-php": "dev-main"
+        "minos-moderation/client-php": "^0.2"
     },
     "require-dev": {
         "ext-curl": "*",

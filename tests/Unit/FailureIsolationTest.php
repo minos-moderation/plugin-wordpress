@@ -643,6 +643,32 @@ final class FailureIsolationTest extends PluginTestCase
     }
 
     /**
+     * A person holds a comment whose publication on its verdict was left unfinished, and the
+     * database refuses the write that ends its wait: the person's hold still stands, against
+     * the gateway's redelivery and against the sweep's timeout under fail-open.
+     */
+    public function testAPersonsHoldWhoseSettlementIsRefusedStandsAgainstTheRedeliveryAndTheSweep(): void
+    {
+        $this->configure(['failure_mode' => Settings::FAIL_OPEN]);
+        $this->ids = [0, $this->post('Komentarz wstrzymany przez osobę, gdy baza odmawia zapisu.')];
+        // WordPress approved it on its verdict, then another plugin's hook threw.
+        WpStub::$comments[$this->ids[1]]['comment_approved'] = '1';
+        WpStub::$meta[$this->ids[1]][Meta::AUTO_PUBLISHED] = '1';
+        $this->refuseMeta($this->ids[1], Meta::STATUS);
+
+        self::assertTrue(wp_set_comment_status($this->ids[1], 'hold'));
+        $this->assertLoggedOnce(Log::STEP_VERDICT);
+        $changes = WpStub::$statusChanges;
+
+        self::assertSame(200, $this->deliver(self::verdict($this->ids[1], 'bezpieczne')));
+        $this->now += Settings::DEFAULT_TIMEOUT_MIN * 60;
+        do_action(Sweeper::HOOK);
+
+        self::assertSame('0', $this->field($this->ids[1], 'comment_approved'), 'the person\'s hold stands');
+        self::assertSame($changes, WpStub::$statusChanges);
+    }
+
+    /**
      * An update whose write the database refused runs on `init`: nothing escapes, the data
      * version stays, and the next request runs the steps again.
      */

@@ -240,7 +240,10 @@ Decisions worth knowing before changing anything:
   stays held, and an upgrade runs again on the next request. A comment whose marks could not
   all be written in the author's request loses them (`Submission::forget`): left with
   `oczekuje` but without `_minos_waiting`, the sweep would never find it, and WordPress's
-  e-mail to the moderator would stay held back; without them a person decides on it. The stubbed
+  e-mail to the moderator would stay held back; without them a person decides on it. A
+  person's hold whose settlement the database refuses (`Outcome::onStatusChange`) drops
+  `_minos_status`, `_minos_waiting` and `_minos_retry_at` instead, so neither a redelivery
+  nor the sweep's timeout under fail-open publishes the comment over that hold. The stubbed
   `update_comment_meta` runs core's `update_comment_metadata` short-circuit, so a test can
   refuse one write.
 - **Slashes.** `wp_update_comment` and `update_comment_meta` unslash their input, so

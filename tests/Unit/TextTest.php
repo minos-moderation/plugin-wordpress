@@ -167,6 +167,21 @@ final class TextTest extends PluginTestCase
             preg_split('/\s+/u', Text::plain('<p title="zakazane">link</p>')), 'a block tag with a title keeps it');
     }
 
+    /**
+     * An attribute right after a quoted value, with no space between (kses always puts one,
+     * another filter may not), is read like any other: its text is sent, its link counted.
+     */
+    public function testAnAttributeRightAfterAQuotedValueIsStillRead(): void
+    {
+        self::assertSame(['pierwsze', 'drugie', 'tekst'],
+            preg_split('/\s+/u', Text::plain('<abbr title="pierwsze"alt="drugie">tekst</abbr>')));
+        $html = '<a href="https://pierwszy.example/"title="https://drugi.example/">tekst</a>';
+        self::assertSame(2, Text::linkCount($html));
+        self::assertSame(['pierwszy.example', 'drugi.example'], Text::linkDomains($html));
+        self::assertSame(['tekst'], preg_split('/\s+/u', Text::plain('<abbr data-title="ukryte">tekst</abbr>')),
+            'still only the attribute itself, not one whose name ends with it');
+    }
+
     public function testAQuotedWordIsSentApartFromTheNextOne(): void
     {
         $this->configure();

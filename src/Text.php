@@ -63,8 +63,12 @@ final class Text
      */
     private const INVISIBLE = '/[\s\p{Z}\p{Cf}\p{M}\p{Cc}\x{115F}\x{1160}\x{3164}\x{FFA0}\x{2800}]+/u';
 
-    /** A `title` or `alt` attribute inside a tag, quoted or not. */
-    private const TEXT_ATTRIBUTE = '/[\s"\'](?:title|alt)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s"\'=<>`]+))/i';
+    /**
+     * A `title` or `alt` attribute inside a tag, quoted or not. The character before it is
+     * looked at, not taken: an attribute right after a quoted value (`title="a"alt="b"`,
+     * which kses never stores but another filter may) still follows its closing quote.
+     */
+    private const TEXT_ATTRIBUTE = '/(?<=[\s"\'])(?:title|alt)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s"\'=<>`]+))/i';
 
     /** A link, in a link's `href` or in the text. */
     private const LINK = '#https?://[^\s"\'<>]+#i';
@@ -73,9 +77,10 @@ final class Text
      * The attributes of a tag whose value counts for the links (shared rules F7, S2): a
      * link's `href`, and the `title` and `alt` text a reader sees, which is sent too. Not
      * an image's `src` or `srcset`, nor a quote's `cite`: an address the reader never sees
-     * as a link is not one.
+     * as a link is not one. Like {@see TEXT_ATTRIBUTE}, the character before it is looked
+     * at, not taken.
      */
-    private const LINK_ATTRIBUTE = '/[\s"\'](?:href|title|alt)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s"\'=<>`]+))/i';
+    private const LINK_ATTRIBUTE = '/(?<=[\s"\'])(?:href|title|alt)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s"\'=<>`]+))/i';
 
     /**
      * Second-level labels that are public suffixes under a country code (`co.uk`,

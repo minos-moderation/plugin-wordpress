@@ -10,10 +10,12 @@ use PHPUnit\Framework\TestCase;
  * The review trail CI checks (`.github/review-trail/check.py`, run by
  * `.github/workflows/review-trail.yml`): a pull request that changes a path on the risk list
  * passes only with `Review: <agent> @ <head SHA> — AKCEPTACJA` for its current head, in its
- * description or a member's comment (the rule is in this repository's
- * CLAUDE.md). The script runs as the workflow runs it, on synthetic events,
- * path lists and comments, and once against a fake of GitHub's API for the comments it reads
- * itself.
+ * description or a comment by someone who may push (the rule is in this repository's
+ * CLAUDE.md).
+ * The script runs as the workflow runs it, on synthetic events, pull requests, path lists,
+ * comments and permissions, and against a fake of GitHub's API for what it reads itself:
+ * the pull request, its comments and the permission of who wrote them, never the event's
+ * `author_association`, which GitHub computes for the app that receives the event.
  */
 final class ReviewTrailTest extends TestCase
 {
@@ -26,6 +28,16 @@ final class ReviewTrailTest extends TestCase
     private const HEAD = '0123456789abcdef0123456789abcdef01234567';
 
     private const OLD_HEAD = 'fedcba9876543210fedcba9876543210fedcba98';
+
+    /**
+     * The repository permission of each login, as the collaborators API gives it; a login
+     * not here has none (the API answers 404).
+     */
+    private const PERMISSIONS = ['owner-login' => 'admin', 'maintainer' => 'maintain', 'writer' => 'write',
+        'triager' => 'triage', 'reader' => 'read'];
+
+    /** A path on the risk list, for the tests that need any one. */
+    private const RISK_PATH = 'src/x.php';
 
     private string $dir;
 
@@ -84,8 +96,9 @@ final class ReviewTrailTest extends TestCase
     public static function trails(): iterable
     {
         $accept = 'Review: przeglad-bezpieczenstwa @ ' . self::HEAD . ' — AKCEPTACJA';
-        $member = static function (string $body, string $role = 'MEMBER'): array {
-            return ['body' => $body, 'author_association' => $role, 'user' => ['login' => 'owner-login']];
+        // A comment by a login; the event's association is what GitHub's payload said of it.
+        $member = static function (string $body, string $login = 'owner-login', string $association = 'MEMBER'): array {
+            return ['body' => $body, 'author_association' => $association, 'user' => ['login' => $login]];
         };
         yield 'no line' => [null, [], 1];
         yield 'in the description' => ["Agent: programista (Opus)\n\n" . $accept, [], 0];
@@ -102,8 +115,14 @@ final class ReviewTrailTest extends TestCase
             [$member('Review: przeglad-bezpieczenstwa @ ' . self::HEAD . ' - POPRAWKI (1 major)')], 1];
         yield 'accepted after changes asked' => [null, [$member('Review: x @ ' . self::HEAD . ' — POPRAWKI'),
             $member("Re-check.\nReview: przeglad-bezpieczenstwa @ " . self::HEAD . ' – AKCEPTACJA')], 0];
-        yield 'by someone without a role in the repository' => [null, [$member($accept, 'NONE')], 1];
-        yield 'by a contributor' => [null, [$member($accept, 'CONTRIBUTOR')], 1];
+        yield 'by someone without a role in the repository' => [null, [$member($accept, 'stranger', 'NONE')], 1];
+        yield 'by a reader the payload calls a member' => [null, [$member($accept, 'reader', 'MEMBER')], 1];
+        yield 'by a triager the payload calls a collaborator' => [null, [$member($accept, 'triager', 'COLLABORATOR')], 1];
+        yield 'by an admin the payload calls a contributor' => [null, [$member($accept, 'owner-login', 'CONTRIBUTOR')], 0];
+        yield 'by a maintainer the payload calls nobody' => [null, [$member($accept, 'maintainer', 'NONE')], 0];
+        yield 'by a writer' => [null, [$member($accept, 'writer', 'NONE')], 0];
+        yield 'a reader\'s acceptance after a writer\'s changes asked' => [null,
+            [$member('Review: x @ ' . self::HEAD . ' — POPRAWKI', 'writer'), $member($accept, 'reader')], 1];
         yield 'quoted inside a sentence' => [null, [$member('as in: ' . $accept)], 1];
     }
 
@@ -118,11 +137,76 @@ final class ReviewTrailTest extends TestCase
         self::assertStringContainsString('src/Receiver.php', $out);
     }
 
-    public function testADescriptionBySomeoneWithoutARoleDoesNotCount(): void
+    /** @return iterable<string,array{0:string,1:string,2:int}> */
+    public static function descriptionAuthors(): iterable
+    {
+        // The payload's association is what failed the owner's own lines: it decides nothing.
+        yield 'an admin the payload calls a contributor' => ['owner-login', 'CONTRIBUTOR', 0];
+        yield 'an admin the payload calls nobody' => ['owner-login', 'NONE', 0];
+        yield 'a writer' => ['writer', 'NONE', 0];
+        yield 'a reader the payload calls a member' => ['reader', 'MEMBER', 1];
+        yield 'a reader the payload calls the owner' => ['reader', 'OWNER', 1];
+        yield 'a triager' => ['triager', 'COLLABORATOR', 1];
+        yield 'someone without a role' => ['stranger', 'COLLABORATOR', 1];
+    }
+
+    /**
+     * The description counts when its author may push to the repository, whatever the
+     * event's `author_association` says.
+     *
+     * @dataProvider descriptionAuthors
+     */
+    public function testTheDescriptionCountsByItsAuthorsPermission(string $author, string $association, int $expected): void
     {
         $accept = 'Review: przeglad-bezpieczenstwa @ ' . self::HEAD . ' — AKCEPTACJA';
-        [$status, $out] = $this->check(['src/x.php'], [], $accept, 'CONTRIBUTOR');
+        [$status, $out] = $this->check([self::RISK_PATH], [], $accept, $author, $association);
+        self::assertSame($expected, $status, $out);
+        self::assertStringContainsString(self::PERMISSIONS[$author] ?? 'none', $out);
+    }
+
+    /**
+     * The description is the pull request's as it is now, not the event's copy: a line only
+     * in the event does not count, a line written since does.
+     */
+    public function testTheDescriptionIsTheLiveOne(): void
+    {
+        $accept = 'Review: przeglad-bezpieczenstwa @ ' . self::HEAD . ' — AKCEPTACJA';
+        [$status, $out] = $this->check([self::RISK_PATH], [], null, 'owner-login', 'MEMBER', $accept);
+        self::assertSame(1, $status, 'a line in the event alone counted: ' . $out);
+        [$status, $out] = $this->check([self::RISK_PATH], [], $accept, 'owner-login', 'MEMBER', null);
+        self::assertSame(0, $status, $out);
+        self::assertStringContainsString('in the description', $out);
+    }
+
+    /**
+     * One line tells who wrote the description, their permission, the event's association
+     * and the description's length; the description itself is never printed.
+     */
+    public function testTheLogNamesTheDescriptionsAuthorAndLengthButNotItsText(): void
+    {
+        $body = "Notatka-ktorej-nie-ma-w-logu zażółć\n\nReview: przeglad-bezpieczenstwa @ " . self::HEAD . ' — AKCEPTACJA';
+        [$status, $out] = $this->check([self::RISK_PATH], [], $body, 'owner-login', 'CONTRIBUTOR');
+        self::assertSame(0, $status, $out);
+        $line = preg_grep('/^The description: /', explode("\n", $out)) ?: [];
+        self::assertCount(1, $line, 'no single diagnostic line: ' . $out);
+        $line = (string)reset($line);
+        self::assertStringContainsString(preg_match_all('/./su', $body) . ' character(s)', $line);
+        self::assertStringContainsString('by owner-login', $line);
+        self::assertStringContainsString('permission admin', $line);
+        self::assertStringContainsString('CONTRIBUTOR', $line);
+        self::assertStringNotContainsString('Notatka-ktorej-nie-ma-w-logu', $out, 'the description reached the log');
+    }
+
+    /**
+     * A run for a head the pull request has left fails: the run for the new head decides, and
+     * an old run re-run later cannot turn green on a description written for the new one.
+     */
+    public function testARunForAHeadThePullRequestHasLeftFails(): void
+    {
+        $accept = 'Review: przeglad-bezpieczenstwa @ ' . self::HEAD . ' — AKCEPTACJA';
+        [$status, $out] = $this->check([self::RISK_PATH], [], $accept, 'owner-login', 'MEMBER', null, self::OLD_HEAD);
         self::assertSame(1, $status, $out);
+        self::assertStringContainsString('head is now ' . self::OLD_HEAD, $out);
     }
 
     /** @return iterable<string,array{0:list<string>}> */
@@ -135,6 +219,13 @@ final class ReviewTrailTest extends TestCase
             '{dir}/empty.txt', '--comments', '{dir}/comments.json']];
         yield 'comments that are no list' => [['--event', '{dir}/event.json', '--paths', '{dir}/paths.txt', '--exempt',
             self::EXEMPT, '--comments', '{dir}/event.json']];
+        yield 'a pull request that is no object' => [['--event', '{dir}/event.json', '--paths', '{dir}/paths.txt', '--exempt',
+            self::EXEMPT, '--pull', '{dir}/comments.json', '--comments', '{dir}/comments.json', '--permissions', '{dir}/event.json']];
+        yield 'permissions that are no object' => [['--event', '{dir}/event.json', '--paths', '{dir}/paths.txt', '--exempt',
+            self::EXEMPT, '--pull', '{dir}/pull.json', '--comments', '{dir}/comments.json', '--permissions', '{dir}/comments.json']];
+        yield 'an event without the pull request\'s number' => [['--event', '{dir}/no-number.json', '--paths', '{dir}/paths.txt',
+            '--exempt', self::EXEMPT, '--pull', '{dir}/pull.json', '--comments', '{dir}/comments.json', '--permissions',
+            '{dir}/permissions.json']];
     }
 
     /**
@@ -143,36 +234,58 @@ final class ReviewTrailTest extends TestCase
      */
     public function testBadInputExitsTwo(array $arguments): void
     {
-        $this->writeInputs(['src/x.php'], [], null, 'MEMBER');
+        $this->writeInputs([self::RISK_PATH], [], null);
         file_put_contents($this->dir . '/comments.json', '[]');
         file_put_contents($this->dir . '/empty.txt', "# only a comment\n\n");
+        file_put_contents($this->dir . '/no-number.json', json_encode(['pull_request' => ['head' => ['sha' => self::HEAD]]]));
         [$status, $out, $err] = $this->runCheck(str_replace('{dir}', $this->dir, $arguments), []);
         self::assertSame(2, $status, $out . $err);
     }
 
     /**
-     * Without `--comments` the script reads every page of the comments from the API, with the
-     * token, as in CI; the acceptance on the second page counts.
+     * Without `--pull`, `--comments` and `--permissions` the script reads them from the API,
+     * with the token, as in CI: the pull request once, every page of its comments, and the
+     * permission of each author of a review line once. The owner's acceptance counts though
+     * the payload calls them a contributor; a login the API does not know (404) has none.
      */
-    public function testTheCommentsAreReadFromTheApiPageByPage(): void
+    public function testThePullRequestItsCommentsAndThePermissionsAreReadFromTheApi(): void
     {
+        $accept = 'Review: przeglad-bezpieczenstwa @ ' . self::HEAD . ' — AKCEPTACJA';
         $comments = [];
         for ($i = 0; $i < 100; $i++) {
             $comments[] = ['body' => "comment {$i}", 'author_association' => 'MEMBER', 'user' => ['login' => 'a']];
         }
-        $comments[] = ['body' => 'Review: przeglad-bezpieczenstwa @ ' . self::HEAD . ' — AKCEPTACJA',
-            'author_association' => 'MEMBER', 'user' => ['login' => 'owner-login']];
+        $comments[] = ['body' => 'Review: x @ ' . self::HEAD . ' — POPRAWKI', 'author_association' => 'MEMBER',
+            'user' => ['login' => 'reader']];
+        $comments[] = ['body' => $accept, 'author_association' => 'MEMBER', 'user' => ['login' => 'reader']];
+        $comments[] = ['body' => $accept, 'author_association' => 'NONE', 'user' => ['login' => 'ghost']];
+        $comments[] = ['body' => $accept, 'author_association' => 'CONTRIBUTOR', 'user' => ['login' => 'owner-login']];
         $server = $this->startFakeApi($comments);
         try {
-            $this->writeInputs(['src/x.php'], null, null, 'MEMBER');
+            $this->writeInputs([self::RISK_PATH], null, null, 'owner-login', 'CONTRIBUTOR');
             $env = $this->apiEnv();
             [$status, $out, $err] = $this->runCheck(['--event', $this->dir . '/event.json', '--paths', $this->dir . '/paths.txt',
                 '--exempt', self::EXEMPT], $env);
             self::assertSame(0, $status, $out . $err);
             self::assertStringContainsString('a comment by owner-login', $out);
+            self::assertStringContainsString('ghost (none)', $out, 'a login the API does not know has a permission');
+            self::assertStringContainsString('reader (read)', $out);
             $requests = file($this->dir . '/api.log', FILE_IGNORE_NEW_LINES) ?: [];
-            self::assertCount(2, $requests, 'two pages, then it stops');
-            self::assertStringEndsWith('Bearer test-token', $requests[0]);
+            $paths = array_map(static function (string $request): string {
+                return (string)strtok($request, ' ');
+            }, $requests);
+            $repository = '/repos/' . $env['GITHUB_REPOSITORY'];
+            self::assertSame([
+                "{$repository}/pulls/7",
+                "{$repository}/collaborators/owner-login/permission",
+                "{$repository}/issues/7/comments?per_page=100&page=1",
+                "{$repository}/issues/7/comments?per_page=100&page=2",
+                "{$repository}/collaborators/reader/permission",
+                "{$repository}/collaborators/ghost/permission",
+            ], $paths, 'two pages, then it stops; one permission read per login');
+            foreach ($requests as $request) {
+                self::assertStringEndsWith('Bearer test-token', $request);
+            }
             self::assertStringNotContainsString('test-token', $out . $err, 'the token is never printed');
 
             unset($env['GITHUB_TOKEN']);
@@ -180,6 +293,25 @@ final class ReviewTrailTest extends TestCase
                 '--exempt', self::EXEMPT], $env);
             self::assertSame(2, $status, 'without a token it cannot tell');
             self::assertStringContainsString('GITHUB_TOKEN', $err);
+        } finally {
+            proc_terminate($server);
+            proc_close($server);
+        }
+    }
+
+    /**
+     * A permission the API refuses to give (as a token without `metadata: read` would get)
+     * fails the check as bad input, naming the status; it never reads as "no permission".
+     */
+    public function testAPermissionTheApiRefusesFailsTheCheck(): void
+    {
+        $server = $this->startFakeApi([]);
+        try {
+            $this->writeInputs([self::RISK_PATH], null, null, 'refused');
+            [$status, $out, $err] = $this->runCheck(['--event', $this->dir . '/event.json', '--paths', $this->dir . '/paths.txt',
+                '--exempt', self::EXEMPT], $this->apiEnv());
+            self::assertSame(2, $status, $out . $err);
+            self::assertStringContainsString('HTTP 403', $err);
         } finally {
             proc_terminate($server);
             proc_close($server);
@@ -290,21 +422,29 @@ final class ReviewTrailTest extends TestCase
     /**
      * What a pull request names reaches the job's log, where a line that starts with `::`
      * (leading whitespace aside) or holds `##[` is a command to the runner: a path with a line
-     * break, a carriage return or a leading `::`, or a commenter's login, never makes one, and
-     * cannot forge the check's own verdict. The check runs on the names as the workflow gives
-     * them (`-z`).
+     * break, a carriage return or a leading `::`, or a login (the description's author's, a
+     * commenter's, counted or not), never makes one, and cannot forge the check's own verdict.
+     * The check runs on the names as the workflow gives them (`-z`).
      */
     public function testWhatAPullRequestNamesNeverBecomesARunnerCommand(): void
     {
         $forged = '::notice title=Review trail::Reviewed: przeglad-bezpieczenstwa @ ' . self::HEAD . ' — AKCEPTACJA';
+        $author = "b\u{2028}::warning::forged";
+        $commenter = "a\n::error::forged";
+        file_put_contents($this->dir . '/pull.json', json_encode(['number' => 7, 'body' => null,
+            'user' => ['login' => $author], 'head' => ['sha' => self::HEAD]]));
+        file_put_contents($this->dir . '/permissions.json', json_encode([$author => 'admin', $commenter => 'admin']));
         $paths = ["src/x\n{$forged}", '::warning::x', '##[error]y', "src/z\r::error::w", "  ::add-mask::v"];
         file_put_contents($this->dir . '/event.json', json_encode(['pull_request' => ['number' => 7, 'body' => null,
             'author_association' => 'MEMBER', 'head' => ['sha' => self::HEAD]]]));
         file_put_contents($this->dir . '/paths.txt', implode("\0", $paths) . "\0");
         file_put_contents($this->dir . '/comments.json', json_encode([['body' => 'Review: x @ ' . self::HEAD . ' — POPRAWKI',
-            'author_association' => 'MEMBER', 'user' => ['login' => "a\n::error::forged"]]]));
+            'author_association' => 'MEMBER', 'user' => ['login' => $commenter]],
+            ['body' => 'Review: y @ ' . self::HEAD . ' — AKCEPTACJA', 'author_association' => 'MEMBER',
+            'user' => ['login' => "c\r::error::forged"]]]));
         [$status, $out, $err] = $this->runCheck(['--event', $this->dir . '/event.json', '--paths', $this->dir . '/paths.txt',
-            '-z', '--exempt', self::EXEMPT, '--comments', $this->dir . '/comments.json'], []);
+            '-z', '--exempt', self::EXEMPT, '--pull', $this->dir . '/pull.json', '--comments', $this->dir . '/comments.json',
+            '--permissions', $this->dir . '/permissions.json'], []);
 
         self::assertSame(1, $status, 'a forged line passed the check: ' . $out . $err);
         self::assertSame([], self::commandLines($out . "\n" . $err), 'the check printed a runner command');
@@ -312,6 +452,28 @@ final class ReviewTrailTest extends TestCase
         self::assertStringContainsString(count($paths) . ' changed path(s) on the risk list', $out);
         self::assertStringContainsString(substr($forged, 2), $out, 'the forged name is not reported');
         self::assertStringContainsString('a comment by a', $out);
+        self::assertStringContainsString('by b%u2028::warning::forged', $out);
+        self::assertStringContainsString('c%0D::error::forged (none)', $out);
+    }
+
+    /**
+     * The log's escaping (`shown`): a C0 or C1 control, DEL, U+2028 and U+2029 are printed as
+     * `%XX` or `%uXXXX`, and a `%` of the name as `%25`, so an escape in a name reads as the
+     * name's own text, not as a character the runner would decode.
+     */
+    public function testTheLogEscapesControlsSeparatorsAndPercentSigns(): void
+    {
+        $name = "tools/c0\x01\x1b-del\x7f-c1\u{85}\u{9b}-sep\u{2028}\u{2029}-pct%0A%25.php";
+        $this->writeInputs([], [], null);
+        file_put_contents($this->dir . '/paths.txt', $name . "\0");
+        [$status, $out, $err] = $this->runCheck(['--event', $this->dir . '/event.json', '--paths', $this->dir . '/paths.txt',
+            '-z', '--exempt', self::EXEMPT, '--pull', $this->dir . '/pull.json', '--comments', $this->dir . '/comments.json',
+            '--permissions', $this->dir . '/permissions.json'], []);
+
+        self::assertSame(1, $status, $out . $err);
+        self::assertStringContainsString('tools/c0%01%1B-del%7F-c1%85%9B-sep%u2028%u2029-pct%250A%2525.php', $out);
+        self::assertSame(0, preg_match('/[\x00-\x09\x0b-\x1f\x7f]|\x{85}|\x{9b}|\x{2028}|\x{2029}/u', $out),
+            'a control or separator character reached the log: ' . $out);
     }
 
     /**
@@ -451,6 +613,9 @@ final class ReviewTrailTest extends TestCase
         $this->git($runner, ['checkout', '-q', '-B', 'main', 'origin/main']);
         file_put_contents("{$repo}.event.json", json_encode(['pull_request' => ['number' => 7, 'body' => null,
             'author_association' => 'MEMBER', 'head' => ['sha' => $head], 'base' => ['sha' => $base]]]));
+        // What the fake API gives as the pull request now: the same head, by the owner.
+        file_put_contents($this->dir . '/pull.json', json_encode(['number' => 7, 'body' => null,
+            'user' => ['login' => 'owner-login'], 'head' => ['sha' => $head]]));
         $temp = "{$repo}.runner";
         mkdir($temp, 0700);
         $steps = WorkflowYaml::file(self::ROOT . '/.github/workflows/review-trail.yml')['jobs']['trail']['steps'];
@@ -493,32 +658,52 @@ final class ReviewTrailTest extends TestCase
     }
 
     /**
-     * A fake of GitHub's API that lists the comments of pull request 7, page by page, to the
-     * test token only, and logs every request.
+     * A fake of GitHub's API, to the test token only, that logs every request: pull request 7
+     * as `pull.json` has it, its comments page by page, and the permission of each login of
+     * `PERMISSIONS` (`maintain` as `write` and `triage` as `read`, as the API's `permission`
+     * gives them); another login is unknown (404), and `refused` is refused (403).
      *
      * @param list<array<string,mixed>> $comments
      * @return resource The server's process.
      */
     private function startFakeApi(array $comments)
     {
-        file_put_contents($this->dir . '/api.json', json_encode($comments));
+        file_put_contents($this->dir . '/api.json', json_encode(['comments' => $comments, 'permissions' => self::PERMISSIONS]));
         file_put_contents($this->dir . '/router.php', <<<'PHP'
             <?php
-            $log = getenv('FAKE_API_LOG');
-            file_put_contents($log, ($_SERVER['REQUEST_URI'] ?? '') . ' ' . ($_SERVER['HTTP_AUTHORIZATION'] ?? '') . "\n", FILE_APPEND);
-            if (($_SERVER['HTTP_AUTHORIZATION'] ?? '') !== 'Bearer test-token') { http_response_code(401); echo '{}'; return true; }
-            if (!preg_match('#^/repos/minos-moderation/plugin-wordpress/issues/7/comments\?per_page=100&page=(\d+)$#', $_SERVER['REQUEST_URI'] ?? '', $m)) {
-                http_response_code(404); echo '{}'; return true;
-            }
-            $all = json_decode((string)file_get_contents(getenv('FAKE_API_DATA')), true);
+            $uri = $_SERVER['REQUEST_URI'] ?? '';
+            file_put_contents(getenv('FAKE_API_LOG'), $uri . ' ' . ($_SERVER['HTTP_AUTHORIZATION'] ?? '') . "\n", FILE_APPEND);
             header('Content-Type: application/json');
-            echo json_encode(array_slice($all, ((int)$m[1] - 1) * 100, 100));
+            if (($_SERVER['HTTP_AUTHORIZATION'] ?? '') !== 'Bearer test-token') { http_response_code(401); echo '{}'; return true; }
+            $repository = preg_quote('/repos/' . getenv('FAKE_API_REPOSITORY'), '#');
+            $data = json_decode((string)file_get_contents(getenv('FAKE_API_DATA')), true);
+            if (preg_match("#^{$repository}/pulls/7$#", $uri)) {
+                echo (string)file_get_contents(getenv('FAKE_API_PULL'));
+                return true;
+            }
+            if (preg_match("#^{$repository}/issues/7/comments\\?per_page=100&page=(\\d+)$#", $uri, $m)) {
+                echo json_encode(array_slice($data['comments'], ((int)$m[1] - 1) * 100, 100));
+                return true;
+            }
+            if (preg_match("#^{$repository}/collaborators/([^/?]+)/permission$#", $uri, $m)) {
+                $login = rawurldecode($m[1]);
+                if ($login === 'refused') { http_response_code(403); echo '{}'; return true; }
+                if (isset($data['permissions'][$login])) {
+                    $role = $data['permissions'][$login];
+                    $legacy = ['maintain' => 'write', 'triage' => 'read'];
+                    echo json_encode(['permission' => $legacy[$role] ?? $role, 'role_name' => $role, 'user' => ['login' => $login]]);
+                    return true;
+                }
+            }
+            http_response_code(404);
+            echo '{"message":"Not Found"}';
             return true;
             PHP);
         $port = self::freePort();
         $server = proc_open([PHP_BINARY, '-q', '-S', "127.0.0.1:{$port}", $this->dir . '/router.php'],
             [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes,
-            null, ['FAKE_API_LOG' => $this->dir . '/api.log', 'FAKE_API_DATA' => $this->dir . '/api.json']);
+            null, ['FAKE_API_LOG' => $this->dir . '/api.log', 'FAKE_API_DATA' => $this->dir . '/api.json',
+                'FAKE_API_PULL' => $this->dir . '/pull.json', 'FAKE_API_REPOSITORY' => $this->apiEnv()['GITHUB_REPOSITORY']]);
         self::assertIsResource($server);
         $this->apiPort = $port;
         self::waitFor($port);
@@ -526,29 +711,40 @@ final class ReviewTrailTest extends TestCase
     }
 
     /**
-     * Runs the check on a pull request event for HEAD.
+     * Runs the check on a pull request event for HEAD, the pull request, its comments and the
+     * permissions given as files.
      *
-     * @param list<string>                    $paths
-     * @param list<array<string,mixed>>|null  $comments Null: the script reads the API.
+     * @param list<string>              $paths
+     * @param list<array<string,mixed>> $comments
      * @return array{0:int,1:string,2:string}
      */
-    private function check(array $paths, ?array $comments, ?string $body, string $author = 'MEMBER'): array
+    private function check(array $paths, array $comments, ?string $body, string $author = 'owner-login',
+        string $association = 'MEMBER', ?string $eventBody = null, string $liveHead = self::HEAD): array
     {
-        $this->writeInputs($paths, $comments ?? [], $body, $author);
+        $this->writeInputs($paths, $comments, $body, $author, $association, $eventBody, $liveHead);
         return $this->runCheck(['--event', $this->dir . '/event.json', '--paths', $this->dir . '/paths.txt',
-            '--exempt', self::EXEMPT, '--comments', $this->dir . '/comments.json'], []);
+            '--exempt', self::EXEMPT, '--pull', $this->dir . '/pull.json', '--comments', $this->dir . '/comments.json',
+            '--permissions', $this->dir . '/permissions.json'], []);
     }
 
     /**
+     * Writes the event (for HEAD, with the payload's association and its copy of the
+     * description), the pull request as it is now (`$body` by `$author`, at `$liveHead`), the
+     * changed paths, the permissions and, unless null, the comments.
+     *
      * @param list<string>                   $paths
      * @param list<array<string,mixed>>|null $comments
      */
-    private function writeInputs(array $paths, ?array $comments, ?string $body, string $author): void
+    private function writeInputs(array $paths, ?array $comments, ?string $body, string $author = 'owner-login',
+        string $association = 'MEMBER', ?string $eventBody = null, string $liveHead = self::HEAD): void
     {
         file_put_contents($this->dir . '/event.json', json_encode(['action' => 'edited', 'pull_request' => [
-            'number' => 7, 'body' => $body, 'author_association' => $author,
+            'number' => 7, 'body' => $eventBody, 'author_association' => $association,
             'head' => ['sha' => self::HEAD], 'base' => ['sha' => self::OLD_HEAD],
         ]]));
+        file_put_contents($this->dir . '/pull.json', json_encode(['number' => 7, 'body' => $body,
+            'user' => ['login' => $author], 'head' => ['sha' => $liveHead]], JSON_UNESCAPED_UNICODE));
+        file_put_contents($this->dir . '/permissions.json', json_encode(self::PERMISSIONS));
         file_put_contents($this->dir . '/paths.txt', implode("\n", $paths) . "\n");
         if ($comments !== null) {
             file_put_contents($this->dir . '/comments.json', json_encode($comments, JSON_UNESCAPED_UNICODE));

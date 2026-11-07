@@ -503,7 +503,21 @@ final class Outcome
         $published = $this->wp->meta($id, Meta::AUTO_PUBLISHED) === '1';
         $this->forgetAutoPublication($id);
         if ($published && $newStatus === 'unapproved' && $this->wp->meta($id, Meta::STATUS) === Meta::PENDING) {
-            $this->settle($id, Meta::UNASSESSED);
+            try {
+                $this->settle($id, Meta::UNASSESSED);
+            } catch (\Throwable $e) {
+                // In the person's request: nothing escapes. Without its status and its
+                // waiting keys the comment no longer awaits a verdict, so neither a
+                // redelivery nor the sweep's timeout publishes it over the person's hold.
+                $this->failed(Log::STEP_VERDICT, $id);
+                foreach ([Meta::STATUS, Meta::WAITING, Meta::RETRY_AT] as $key) {
+                    try {
+                        $this->wp->deleteMeta($id, $key);
+                    } catch (\Throwable $ignored) {
+                        // Nothing more can be done here.
+                    }
+                }
+            }
         }
     }
 

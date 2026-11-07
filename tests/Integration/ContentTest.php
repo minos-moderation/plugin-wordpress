@@ -90,7 +90,7 @@ final class ContentTest extends IntegrationTestCase
     }
 
     /**
-     * Shared rules D9.5 and F7 on the real kses, which keeps these entities: a comment whose
+     * Shared rule F7 on the real kses, which keeps these entities: a comment whose
      * only text is attribute text and an invisible character is never sent.
      *
      * @dataProvider invisibleOnly

@@ -210,13 +210,18 @@ final class Submission
         if ($this->wp->meta($id, Meta::SENT_HASH) === '' || $this->outcome->readsAsSent($id)) {
             return;
         }
-        $this->reassess($id);
+        try {
+            $this->reassess($id);
+        } catch (\Throwable $e) {
+            // In the editor's request: nothing escapes. The comment stays held.
+            $this->outcome->failed(Log::STEP_SUBMIT, $id);
+        }
     }
 
     /**
      * `update_option_{settings}` action: switching moderation on again sends what was
      * waiting when it was switched off, each as its next revision with a fresh receive
-     * timeout (shared rule D9.13), from WP-Cron rather than in the administrator's request.
+     * timeout (shared rule F9), from WP-Cron rather than in the administrator's request.
      * A comment a person decided on meanwhile is left to that decision. Switching it off or
      * on, or another gateway address, also ends the gateway's pause ({@see Log::endPause}).
      *
@@ -452,7 +457,7 @@ final class Submission
      * Sends comments whose retry fell due (the sweep, a retry event), in requests of at most
      * {@see MAX_ITEMS}, and stops at the first answer that asks to wait. While a pause runs,
      * nothing is sent: each comment is held until it ends, or gets the failure mode at once
-     * when the gateway's pause ends after its receive timeout (shared rule D9.3(a)).
+     * when the gateway's pause ends after its receive timeout (shared rule F5c).
      *
      * One comment that fails while its item is built (another plugin's hook throwing) is left
      * out of the request and stays due; one request that fails while it is sent leaves its
@@ -530,10 +535,17 @@ final class Submission
             return null;
         }
         $content = (string)$comment->comment_content;
-        if (Text::cut(Text::plain($content)) === '' || !Text::hasOwnText($content)) {
+        $plain = Text::extract($content);
+        if ($plain === null) {
+            // Read only in part: what would go is not what a reader sees, and nothing goes
+            // in its place - the failure mode at once (shared rules F7, S1), with the reason.
+            $this->outcome->withoutVerdict($id, Meta::ERROR_UNREADABLE);
+            return null;
+        }
+        if (Text::cut($plain) === '' || !Text::hasOwnText($content)) {
             // Nothing to assess (a link with a blank text, an image with or without its
             // alternative text and nothing else, invisible characters included): no request,
-            // no verdict, no guess - the failure mode at once (shared rules D9.5, F7), with
+            // no verdict, no guess - the failure mode at once (shared rule F7), with
             // the reason for the moderator.
             $this->outcome->withoutVerdict($id, Meta::ERROR_NO_TEXT);
             return null;
@@ -567,7 +579,7 @@ final class Submission
      * Holds a comment while the gateway's pause runs: its retry falls due when the pause
      * ends. When the gateway itself said until when it refuses and that is at or after the
      * comment's receive timeout, no verdict can come in time: the failure mode applies at
-     * once (shared rule D9.3(a)), with the refusal that made the wait hopeless.
+     * once (shared rule F5c), with the refusal that made the wait hopeless.
      *
      * @param int                                           $id    The comment.
      * @param array{until:int,code:string|null,given:bool} $pause The pause.
@@ -637,11 +649,39 @@ final class Submission
         if ($wordpress === null || $id <= 0 || (string)$approved !== '0') {
             return;
         }
-        $this->wp->setMeta($id, Meta::STATUS, Meta::PENDING);
-        $this->wp->setMeta($id, Meta::WAITING, '1');
-        $this->wp->setMeta($id, Meta::HELD_AT, $this->wp->now());
-        $this->wp->setMeta($id, Meta::WP_APPROVED, $wordpress);
+        try {
+            $this->wp->setMeta($id, Meta::STATUS, Meta::PENDING);
+            $this->wp->setMeta($id, Meta::WAITING, '1');
+            $this->wp->setMeta($id, Meta::HELD_AT, $this->wp->now());
+            $this->wp->setMeta($id, Meta::WP_APPROVED, $wordpress);
+        } catch (\Throwable $e) {
+            // In the author's request: nothing escapes. The comment stays held for a person,
+            // as one the plugin does not moderate: a status left `oczekuje` without the keys
+            // the sweep finds it by would wait for ever, and keep WordPress's e-mail to the
+            // moderator held back ({@see Outcome::filterNotifyModerator}).
+            $this->outcome->failed(Log::STEP_SUBMIT, $id);
+            $this->forget($id);
+            return;
+        }
         $this->submitIsolated($id);
+    }
+
+    /**
+     * Removes the marks {@see start} wrote, so a comment it could not start is left to
+     * WordPress and a person. It never throws.
+     *
+     * @param int $id The comment.
+     * @return void
+     */
+    private function forget(int $id): void
+    {
+        foreach ([Meta::STATUS, Meta::WAITING, Meta::HELD_AT, Meta::WP_APPROVED] as $key) {
+            try {
+                $this->wp->deleteMeta($id, $key);
+            } catch (\Throwable $e) {
+                // Nothing more can be done here.
+            }
+        }
     }
 
     /**
@@ -724,7 +764,7 @@ final class Submission
      * Records the gateway's answer for every comment of a request.
      *
      * - `202`: each comment whose item id is in `przyjete` is accepted (its verdict will
-     *   come to the webhook); any other is retried after its own backoff (shared rule D9.6:
+     *   come to the webhook); any other is retried after its own backoff (shared rule F5a:
      *   only `202` with the item in it accepts). Any acceptance ends the refusal pause.
      * - `429`, `5xx`, `408` (a timeout on the way, as no answer), a `2xx` other than `202`
      *   (something on the way answered for the gateway, which took nothing: shared rule
@@ -732,7 +772,7 @@ final class Submission
      *   or, without it, a doubling backoff ends ({@see Log::pause}); each comment of the
      *   request is retried then, but when the gateway's `ponow_za_s`, as given, ends at or
      *   after the comment's receive timeout, no verdict can come in time and the failure
-     *   mode applies at once (shared rule D9.3(a)).
+     *   mode applies at once (shared rule F5c).
      * - a refusal of one item (`blad.element`, for an id, a text or a length): that comment
      *   gets the failure mode; the others are returned, to be sent again.
      * - anything else: a configuration error (the key, the webhook, the URL, the profile);

@@ -496,9 +496,23 @@ function get_comment_meta($id, $key = '', $single = false)
     return $value === null ? [] : [$value];
 }
 
+/**
+ * As core's `update_metadata`: the `update_comment_metadata` short-circuit (a test returns
+ * `false` there for a write the database refuses), then `false` also when the stored value
+ * already is the new one, since nothing was written.
+ */
 function update_comment_meta($id, $key, $value, $prev = '')
 {
-    WpStub::$meta[(int)$id][wp_unslash($key)] = (string)wp_unslash($value);
+    $key = wp_unslash($key);
+    $value = (string)wp_unslash($value);
+    $check = apply_filters('update_comment_metadata', null, $id, $key, $value, $prev);
+    if ($check !== null) {
+        return (bool)$check;
+    }
+    if ((WpStub::$meta[(int)$id][$key] ?? null) === $value) {
+        return false;
+    }
+    WpStub::$meta[(int)$id][$key] = $value;
     return true;
 }
 

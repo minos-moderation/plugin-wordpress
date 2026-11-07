@@ -70,7 +70,7 @@ final class Settings
 
     /**
      * The defaults of a fresh installation. The plugin starts switched off (shared rule
-     * D9.12): it holds no comment until the administrator switches it on.
+     * F8): it holds no comment until the administrator switches it on.
      *
      * @return array<string,mixed> Setting name → value.
      */
@@ -148,7 +148,7 @@ final class Settings
      * Whether the plugin can submit comments and check verdicts: switched on, with a key
      * and a webhook secret the settings form would accept. Switched on without them, it
      * still holds new comments, and gives each the failure mode at once (shared rule
-     * D9.12); the gateway's address is always usable, since an unusable one reads as the
+     * F8); the gateway's address is always usable, since an unusable one reads as the
      * default ({@see normalise}).
      *
      * @return bool The answer.

@@ -669,7 +669,7 @@ final class SubmissionTest extends PluginTestCase
     /**
      * Audit reproduction R4 the other way round: a link only a robot reads, with no text to
      * assess, was published under fail-open with nothing to tell it from an assessed one.
-     * Shared rule D9.5: held, the failure mode at once, no request, and the reason shown.
+     * Shared rule F7: held, the failure mode at once, no request, and the reason shown.
      *
      * @dataProvider nothingToAssess
      */

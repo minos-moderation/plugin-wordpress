@@ -82,7 +82,7 @@ za udane i werdykt przepadnie.
 | Sekret webhooka | — | Służy wyłącznie do sprawdzania podpisu werdyktów i nigdy nie jest wysyłany. Strona pokazuje tylko jego początek. |
 | Profil oceny | `forum_adult` | `forum_adult` — forum dla dorosłych; `forum_teen` — forum dla dzieci i młodzieży. Klucz musi mieć dostęp do wybranego profilu. |
 | Gdy brak werdyktu | fail-closed | Co zrobić z komentarzem bez werdyktu: **fail-open** — opublikować, **fail-closed** — zostawić do ręcznej moderacji. Patrz niżej. |
-| Czas oczekiwania na werdykt | 20 min (od 20 do 1440) | Po tym czasie komentarz bez werdyktu trafia do trybu „Gdy brak werdyktu”. Brama próbuje doręczyć werdykt do chwili krótko przed upływem 15 minut od przyjęcia komentarza (przy domyślnych ustawieniach bramy ok. 12 minut), stąd najmniej 20 minut. Werdykt, który nadejdzie później, jest stosowany do komentarza opublikowanego przy fail-open (patrz niżej). |
+| Czas oczekiwania na werdykt | 20 min (od 20 do 1440) | Po tym czasie komentarz bez werdyktu trafia do trybu „Gdy brak werdyktu”. Brama próbuje doręczyć werdykt do chwili krótko przed upływem 15 minut od przyjęcia komentarza (przy domyślnych ustawieniach bramy ok. 12 minut), stąd najmniej 20 minut. Werdykt, który nadejdzie później, jest stosowany do komentarza opublikowanego przy fail-open (patrz niżej); komentarz wstrzymany przy fail-closed zostaje w moderacji i czeka na decyzję człowieka. |
 | Komentarz ocenzurowany | opublikuj wersję zamaskowaną | Opublikować tekst z fragmentami zastąpionymi znakami `█` albo zostawić komentarz do ręcznej moderacji. Oryginał zostaje zachowany w danych komentarza. Komentarz dłuższy niż 3000 znaków, komentarz z formatowaniem lub odnośnikami i komentarz, którego wersja zamaskowana nie pasuje do wysłanego tekstu, zawsze zostaje do moderacji (z wersją zamaskowaną w kolumnie **Minos**). |
 | Komentarz zablokowany | zostaw do ręcznej moderacji | Zostawić do moderacji albo oznaczyć jako spam. Komentarz z sygnałem wsparcia zawsze zostaje do moderacji (patrz „Sygnał wsparcia”). |
 | Pokazuj informację | włączona | Informacja pod formularzem komentarza (RODO), patrz niżej. |
@@ -137,7 +137,9 @@ Zasady, które obowiązują zawsze:
   tego, jeśli w międzyczasie ktoś zmienił status komentarza; edycję opisuje rozdział
   „Edycja komentarza”. Komentarz z sygnałem wsparcia zostaje opublikowany (przy
   ustawieniu „opublikuj wersję zamaskowaną” — w wersji zamaskowanej, jeśli ta pasuje),
-  a decyzję podejmuje moderator.
+  a decyzję podejmuje moderator. Przy fail-closed spóźniony werdykt nie zmienia
+  komentarza, który po upływie czasu oczekiwania został w moderacji: nawet „bezpieczne”
+  go nie publikuje, decyduje moderator (zapisywany jest tylko ewentualny sygnał wsparcia).
 - **Werdykt dotyczy tylko wysłanego tekstu.** Przed zastosowaniem każdego werdyktu wtyczka
   sprawdza, czy komentarz nadal ma tekst, który wysłała do oceny. Jeśli nie, werdykt nie
   jest stosowany, a komentarz zostaje wstrzymany i wysłany ponownie.
@@ -181,9 +183,13 @@ obrazek — także z opisem `alt` lub `title`, bo brama nie ocenia obrazów, a w
 opisie dotyczyłby czegoś, czego nie widziała; niewidoczne znaki, np. spacja o zerowej
 szerokości albo samotny znak łączący bez litery, do której mógłby się dołączyć, nie są
 tekstem (litera z akcentem nim jest); taki komentarz nie jest wysyłany, a kolumna
-**Minos** podaje powód „brak tekstu do oceny”). Wtedy:
+**Minos** podaje powód „brak tekstu do oceny”), albo gdy wtyczka nie zdoła odczytać całego
+tekstu komentarza (np. znaczniki tak złożone, że przekraczają limit wyrażeń regularnych
+PHP) — wtedy nie wysyła niczego w jego miejsce, nawet odczytanej części, a kolumna
+**Minos** podaje powód „nie udało się odczytać całego tekstu komentarza”. Wtedy:
 
-- **fail-closed** (domyślnie) — komentarz zostaje do ręcznej moderacji;
+- **fail-closed** (domyślnie) — komentarz zostaje do ręcznej moderacji (także gdy werdykt
+  nadejdzie po czasie oczekiwania — patrz „Spóźniony werdykt”);
 - **fail-open** — komentarz zostaje opublikowany (o ile WordPress sam by go opublikował).
 
 **Ponawianie.** Gdy brama każe poczekać — odmowa HTTP 429 (limit minutowy, dzienny lub
@@ -273,7 +279,8 @@ sygnał wsparcia, oryginał komentarza opublikowanego w wersji zamaskowanej, wer
 zamaskowaną komentarza wstrzymanego do moderacji oraz dane techniczne (czasy, skrót
 wysłanego tekstu). **30 dni po rozstrzygnięciu** komentarza (werdykt albo tryb „Gdy brak
 werdyktu”) wtyczka usuwa wszystkie te dane — także oryginał — co godzinę, przez WP-Cron,
-również gdy moderacja jest wyłączona. Sam komentarz zostaje bez zmian: wersja zamaskowana
+również gdy moderacja jest wyłączona (ale nie gdy wtyczka jest dezaktywowana — patrz
+„Wyłączenie i usunięcie”). Sam komentarz zostaje bez zmian: wersja zamaskowana
 pozostaje opublikowana, a kolumna **Minos** pokazuje odtąd „—”. Dane komentarzy, które
 wciąż czekają na werdykt, nie są usuwane.
 
@@ -306,11 +313,21 @@ z sygnałem w kolumnie **Minos**.
 Sygnał wsparcia działa zawsze, także w werdykcie, którego wtyczka już nie stosuje: gdy
 przychodzi po decyzji moderatora (komentarz zatwierdzony, wstrzymany, oznaczony jako spam,
 przeniesiony do kosza albo zmieniony), po zmianie treści komentarza albo po upływie czasu
-oczekiwania. Taki werdykt nie zmienia statusu ani treści komentarza i nie zapisuje
-kategorii — wtyczka zapisuje tylko sygnał wsparcia z dopiskiem, że nadszedł po decyzji
-moderatora, widoczny w kolumnie **Minos** i w powiadomieniu na liście komentarzy.
+oczekiwania. Taki werdykt nie zmienia statusu ani treści komentarza. Jeśli komentarz
+wciąż na niego czekał (moderator zdecydował, zanim werdykt nadszedł), wtyczka zapisuje
+werdykt i kategorie, jak mówi zasada „Decyzja człowieka wygrywa”; werdykt, na który
+komentarz już nie czeka (po upływie czasu oczekiwania, po zmianie treści, dla wcześniejszej
+wersji tekstu), nie zapisuje nawet kategorii. W obu przypadkach wtyczka zapisuje sygnał
+wsparcia z dopiskiem, że nadszedł po decyzji moderatora, widoczny w kolumnie **Minos**
+i w powiadomieniu na liście komentarzy.
 O komentarzu, który nadal jest wstrzymany, moderator dostaje też e-mail z informacją
 o sygnale. Powtórzone doręczenie tego samego werdyktu niczego nie dubluje.
+
+Sygnał dotyczy osoby, nie jednej wersji tekstu: komentarz, który dostał go w werdykcie dla
+wcześniejszej wersji, jest traktowany jak komentarz z sygnałem przy każdym następnym
+werdykcie. Świadomie także wtedy, gdy nowa wersja dostanie werdykt bez sygnału: spóźnione
+„zablokowane” nie zdejmuje ze strony jej publikacji przy fail-open, a „zablokowane” na czas
+zostawia ją do moderacji zamiast oznaczać jako spam — decyduje moderator.
 
 ## Dziennik i błędy
 
@@ -334,13 +351,19 @@ komentarza — bez treści błędu, która mogłaby zawierać tekst komentarza �
 pozostałe komentarze dalej. Ten komentarz czeka: krok zostaje powtórzony w następnym
 przebiegu WP-Cron albo przy ponownym doręczeniu werdyktu przez bramę. Przy fail-open
 komentarz, który WordPress zdążył opublikować, zostaje opublikowany; dokończenie zapisu
-następuje w kolejnym przebiegu.
+następuje w kolejnym przebiegu. Tak samo wtyczka traktuje zapis, którego baza danych nie
+przyjęła: webhook odpowiada wtedy błędem (HTTP 500) zamiast potwierdzenia, więc brama
+doręcza werdykt ponownie i nie przepada on po cichu.
 
 ## Wyłączenie i usunięcie
 
 - **Wyłączenie moderacji** w ustawieniach zatrzymuje wtyczkę (patrz „Instalacja”).
 - **Dezaktywacja** zatrzymuje zadania WP-Cron. Komentarze czekające na werdykt zostają
-  w moderacji, ustawienia zostają zachowane.
+  w moderacji, ustawienia zostają zachowane. Zatrzymuje też usuwanie danych po 30 dniach:
+  dane `_minos_*` (także oryginały komentarzy opublikowanych w wersji zamaskowanej)
+  zostają do ponownej aktywacji, która wznawia usuwanie, albo do usunięcia wtyczki, które
+  kasuje je wszystkie. Uwzględnij to w polityce prywatności, jeśli dezaktywujesz wtyczkę
+  na dłużej.
 - **Usunięcie** wtyczki kasuje jej ustawienia (w tym klucz i sekret), dziennik, zadania
   i wszystkie dane `_minos_*` przy komentarzach. Komentarze zostają: opublikowana wersja
   zamaskowana pozostaje zamaskowana (oryginał znika razem z danymi wtyczki), a czekające —

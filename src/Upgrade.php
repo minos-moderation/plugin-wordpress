@@ -46,6 +46,24 @@ final class Upgrade
         if ($from >= self::VERSION) {
             return;
         }
+        try {
+            $this->steps($from);
+        } catch (\Throwable $e) {
+            // On `init`, in every request: nothing escapes. A write that failed leaves the
+            // version where it was, so the next request runs the steps again.
+            return;
+        }
+        $this->wp->saveOption(self::OPTION, self::VERSION, true);
+    }
+
+    /**
+     * The steps after a version; each may run again.
+     *
+     * @param int $from The version the site has.
+     * @return void
+     */
+    private function steps(int $from): void
+    {
         if ($from < 2) {
             foreach ($this->wp->commentIdsWithMeta(Meta::STATUS, Meta::PENDING) as $id) {
                 $this->wp->setMeta($id, Meta::WAITING, '1');
@@ -60,6 +78,5 @@ final class Upgrade
                 $this->wp->setMeta($id, Meta::DECIDED_AT, $held > 0 ? $held : $this->wp->now());
             }
         }
-        $this->wp->saveOption(self::OPTION, self::VERSION, true);
     }
 }

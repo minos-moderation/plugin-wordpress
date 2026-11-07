@@ -63,8 +63,12 @@ final class Text
      */
     private const INVISIBLE = '/[\s\p{Z}\p{Cf}\p{M}\p{Cc}\x{115F}\x{1160}\x{3164}\x{FFA0}\x{2800}]+/u';
 
-    /** A `title` or `alt` attribute inside a tag, quoted or not. */
-    private const TEXT_ATTRIBUTE = '/[\s"\'](?:title|alt)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s"\'=<>`]+))/i';
+    /**
+     * A `title` or `alt` attribute inside a tag, quoted or not. The character before it is
+     * looked at, not taken: an attribute right after a quoted value (`title="a"alt="b"`,
+     * which kses never stores but another filter may) still follows its closing quote.
+     */
+    private const TEXT_ATTRIBUTE = '/(?<=[\s"\'])(?:title|alt)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s"\'=<>`]+))/i';
 
     /** A link, in a link's `href` or in the text. */
     private const LINK = '#https?://[^\s"\'<>]+#i';
@@ -73,9 +77,10 @@ final class Text
      * The attributes of a tag whose value counts for the links (shared rules F7, S2): a
      * link's `href`, and the `title` and `alt` text a reader sees, which is sent too. Not
      * an image's `src` or `srcset`, nor a quote's `cite`: an address the reader never sees
-     * as a link is not one.
+     * as a link is not one. Like {@see TEXT_ATTRIBUTE}, the character before it is looked
+     * at, not taken.
      */
-    private const LINK_ATTRIBUTE = '/[\s"\'](?:href|title|alt)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s"\'=<>`]+))/i';
+    private const LINK_ATTRIBUTE = '/(?<=[\s"\'])(?:href|title|alt)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s"\'=<>`]+))/i';
 
     /**
      * Second-level labels that are public suffixes under a country code (`co.uk`,
@@ -108,21 +113,51 @@ final class Text
      * word would go unassessed.
      *
      * @param string $html The stored comment content.
-     * @return string The text, or '' when the content is not valid UTF-8.
+     * @return string The text, or '' when it cannot be read whole ({@see extract}).
      */
     public static function plain(string $html): string
     {
+        return self::extract($html) ?? '';
+    }
+
+    /**
+     * {@see plain}, or null when the text cannot be read whole: the content is not valid
+     * UTF-8, or one of the regexes gives up (a PCRE limit returns null). A text read in part
+     * is never sent in place of the whole (shared rules F7, S1): skipping a step would send
+     * what a reader never sees (the content of a `script`) or less than they see (attribute
+     * text dropped, two words joined at a block boundary), so such a comment gets the
+     * failure mode instead.
+     *
+     * @param string $html The stored comment content.
+     * @return string|null The text, or null when it cannot be read whole.
+     */
+    public static function extract(string $html): ?string
+    {
         if (preg_match('//u', $html) !== 1) {
-            return '';
+            return null;
         }
-        // A regex that gives up (a PCRE limit) returns null: then the step is skipped and
-        // more text is assessed, never less — an empty text would get the failure mode.
-        $text = preg_replace('@<(script|style)[^>]*?>.*?</\\1>@si', '', $html) ?? $html;
-        $text = preg_replace_callback(self::TAG, [self::class, 'attributeText'], $text) ?? $text;
+        $text = preg_replace('@<(script|style)[^>]*?>.*?</\\1>@si', '', $html);
+        if ($text === null) {
+            return null;
+        }
+        $failed = false;
+        $text = preg_replace_callback(self::TAG, static function (array $match) use (&$failed): string {
+            $texts = self::attributeText($match);
+            if ($texts === null) {
+                $failed = true;
+                return $match[0];
+            }
+            return $texts;
+        }, $text);
+        if ($text === null || $failed) {
+            return null;
+        }
         // After the attribute text, which a block tag with a `title` keeps in its place.
-        $text = preg_replace(self::BLOCK, "\n", $text) ?? $text;
-        $text = html_entity_decode(strip_tags($text), ENT_QUOTES | ENT_HTML5, 'UTF-8');
-        return self::trim($text);
+        $text = preg_replace(self::BLOCK, "\n", $text);
+        if ($text === null) {
+            return null;
+        }
+        return self::trim(html_entity_decode(strip_tags($text), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
     }
 
     /**
@@ -139,7 +174,8 @@ final class Text
         if (preg_match('//u', $html) !== 1) {
             return '';
         }
-        // As in plain(): a regex that gives up leaves its input, so more text, never less.
+        // Asked once extract() read the whole text: a regex that gives up here leaves its
+        // input, so the comment counts as having text, never less.
         $text = preg_replace('@<(script|style)[^>]*?>.*?</\\1>@si', '', $html) ?? $html;
         $text = preg_replace(self::BLOCK, "\n", $text) ?? $text;
         return self::trim(html_entity_decode(strip_tags($text), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
@@ -148,7 +184,7 @@ final class Text
     /**
      * Whether the comment has text of its own that a reader sees: {@see ownText} with
      * something left once every invisible character ({@see INVISIBLE}) is removed. Without
-     * it the comment has no text to assess (shared rules D9.5, F7): a zero-width space in a
+     * it the comment has no text to assess (shared rule F7): a zero-width space in a
      * blank link or beside an image is not text, and must not carry an `alt` or a `title`
      * to the gateway. When the check cannot run (a PCRE limit) the answer is yes: the
      * comment is sent, more text and never less. What is sent stays {@see plain}.
@@ -346,15 +382,17 @@ final class Text
     }
 
     /**
-     * {@see plain}'s callback: a tag with `title` or `alt` text becomes that text between
+     * {@see extract}'s callback: a tag with `title` or `alt` text becomes that text between
      * spaces; any other tag is left for `strip_tags`.
      *
      * @param array<int,string> $match The tag.
-     * @return string The replacement.
+     * @return string|null The replacement, or null when the regex gave up.
      */
-    private static function attributeText(array $match): string
+    private static function attributeText(array $match): ?string
     {
-        preg_match_all(self::TEXT_ATTRIBUTE, $match[0], $attributes, PREG_SET_ORDER);
+        if (preg_match_all(self::TEXT_ATTRIBUTE, $match[0], $attributes, PREG_SET_ORDER) === false) {
+            return null;
+        }
         $texts = [];
         foreach ($attributes as $attribute) {
             $value = trim(($attribute[1] ?? '') . ($attribute[2] ?? '') . ($attribute[3] ?? ''));

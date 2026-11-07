@@ -8,7 +8,7 @@ defined('ABSPATH') || exit;
 
 /**
  * Keeps what the plugin stores about a comment for 30 days after it was settled (shared
- * rule D9.11): then every `_minos_*` key of the comment goes, the kept original of a
+ * rule A8): then every `_minos_*` key of the comment goes, the kept original of a
  * masked comment, the masked text a moderator was shown, the verdict and its categories
  * among them. The comment itself stays as it is.
  *
